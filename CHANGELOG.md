@@ -13,7 +13,33 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-16
 
-- **05:15 UTC** — auto-sync: 2026-04-16 05:15 UTC (`42549d0`) — 2 files
+- **20:30 UTC** — auto-sync: 2026-04-16 20:30 UTC (`06b5846`) — 3 files
+        M	src/livekit-agent.js
+        M	src/setup-retell-agent.mjs
+        M	src/trigger-livekit-call.js
+- **20:22 UTC** — Fix 6 P1/P2 reliability and auth bugs in tool pipeline (`c154ba3`) — 3 files
+    Addresses issues #7–#12 discovered on post-launch review of the
+    Shopify → LiveKit → Shopify writeback path.
+    - #9 (P1): COD gateway detection now normalizes non-alphanumerics,
+      so "Cash on Delivery", "cash-on-delivery", "cashondelivery" and "COD"
+      all classify as COD instead of being silently skipped as prepaid.
+    - #8 (P1): /webhook/livekit/tool/* now requires X-COD-Tool-Secret
+      matched against LIVEKIT_TOOL_SECRET via timingSafeEqual. Fails
+      closed if the secret is not configured. Agent sends the header.
+    - #7 (P1): Tool handler returns 400 on bad input and 500 on real
+      backend failures, not 200+{ok:false}. Agent requires both res.ok
+- **05:41 UTC** — Add DISPATCH_MODE=dry_run|live gate for safe beta testing (`4aa450e`) — 1 file
+    Default mode remains 'live' (so missing env doesn't surprise-disable
+    production). For beta, set DISPATCH_MODE=dry_run.
+    In dry_run:
+      - Webhook handler runs full validation (HMAC, allowlist, COD detection,
+        phone normalization, DND adjustment, idempotency)
+      - ScheduledCall rows are enqueued exactly as in production
+      - Scheduler picks up due rows on its 30s tick
+      - Instead of calling triggerLivekitCall, the scheduler logs the full
+        payload and writes status='done', outcome='dry_run' + a CallAttempt
+        with disposition='dry_run'
+- **05:15 UTC** — auto-sync: 2026-04-16 05:15 UTC (`e925c11`) — 3 files
         M	src/lib/scheduler.js
         M	src/server.js
 - **04:35 UTC** — Production-ready beta: DB queue, DND, phone normalization, retry, allowlist (`97a32ba`) — 4 files

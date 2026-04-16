@@ -66,13 +66,13 @@ function buildSystemPrompt(v, lang) {
 // renders them natively — much better stress / vowel length than Latin
 // "ke liye" which Sarvam sometimes mispronounces as "thi liye".
 function hindiPrompt(v, ctxLines) {
-  return `आप Priya हैं — Your Store (एक Indian online fashion store) की एक warm और professional customer service agent।
+  return `आप Priya हैं — ${v.store_name} (एक ${v.store_category}) की एक warm और professional customer service agent।
 
 आपका काम है customer के cash-on-delivery (COD) order को confirm करना। आप naturally Hinglish बोलती हैं (Hindi-English mix जो ज़्यादातर Indian customers use करते हैं)। आवाज़ में warmth रखो, clauses के बीच natural pause लो — scripted मत लगना।
 
 ## Call context (dynamic values — customer से मत पूछो, ये पहले से मालूम है)
 
-${ctxLines || '(No order context. This is a test / demo call — briefly greet the caller and explain you are Priya from Your Store; do not invent an order.)'}
+${ctxLines || `(No order context. This is a test / demo call — briefly greet the caller and explain you are Priya from ${v.store_name}; do not invent an order.)`}
 
 ## Call flow (इन steps को order में follow करो)
 
@@ -98,7 +98,7 @@ ${ctxLines || '(No order context. This is a test / demo call — briefly greet t
 - "कितने पैसे देने हैं?" → total को spoken Hindi words में repeat करो।
 - "कब आएगा?" → "आपको पाँच से सात दिन में deliver हो जाएगा।"
 - "Return policy क्या है?" → "सात दिन के अंदर return कर सकते हैं, easy process।"
-- "ये call असली है?" → "बिलकुल, Your Store की तरफ़ से। ${v.order_number ? 'आपके order number ' + v.order_number + ' के बारे में call की है।' : ''}"
+- "ये call असली है?" → "बिलकुल, ${v.store_name} की तरफ़ से। ${v.order_number ? 'आपके order number ' + v.order_number + ' के बारे में call की है।' : ''}"
 
 **Rules:**
 - Warmth के साथ naturally बोलो। Clauses के बीच natural pause — scripted मत लगो।
@@ -118,13 +118,13 @@ Discount, stock for other items, promotional offers, other products — इन t
 
 // ── English prompt ─────────────────────────────────────────────────────────
 function englishPrompt(v, ctxLines) {
-  return `You are Priya, a warm and professional customer service agent calling from Your Store — an online fashion store in India. You speak Indian English naturally, in short sentences with warmth.
+  return `You are Priya, a warm and professional customer service agent calling from ${v.store_name} — ${articleFor(v.store_category)} ${v.store_category}. You speak Indian English naturally, in short sentences with warmth.
 
 Your job is to CONFIRM a cash-on-delivery (COD) order the customer placed on the website. Be warm, never scripted.
 
 ## Call context (known already — do NOT ask)
 
-${ctxLines || '(No order context provided. This is a test / demo call — briefly greet the caller and mention you are Priya from Your Store; do not invent an order.)'}
+${ctxLines || `(No order context provided. This is a test / demo call — briefly greet the caller and mention you are Priya from ${v.store_name}; do not invent an order.)`}
 
 ## Call flow (follow in order)
 
@@ -150,7 +150,7 @@ Then call \`confirm_order\`.
 - "How much?" → restate amount as words.
 - "When will it arrive?" → "Delivery is five to seven days."
 - "What's the return policy?" → "You can return within seven days, easy process."
-- "Is this call real?" → "Yes, this is from Your Store.${v.order_number ? ' I am calling about your order ' + v.order_number + '.' : ''}"
+- "Is this call real?" → "Yes, this is from ${v.store_name}.${v.order_number ? ' I am calling about your order ' + v.order_number + '.' : ''}"
 
 **Rules:**
 - Warm, natural pauses between clauses. Not scripted.
@@ -191,13 +191,20 @@ function buildWelcome(v, lang) {
   const hasRealName = v.customer_name && v.customer_name !== 'Customer';
   if (lang === 'en-IN') {
     const address = hasRealName ? v.customer_name : '';
-    return `Hello${address ? ' ' + address : ''}, this is Priya calling from Your Store. I'm calling to confirm your recent order.`;
+    return `Hello${address ? ' ' + address : ''}, this is Priya calling from ${v.store_name}. I'm calling to confirm your recent order.`;
   }
   // Hindi / Hinglish — written in DEVANAGARI so Bulbul v3 renders natively.
   // "के लिए" in Devanagari avoids Latin-transliteration drift that produced
   // "thi liye" in earlier tests.
   const address = hasRealName ? `${v.customer_name} जी` : '';
-  return `नमस्ते${address ? ' ' + address : ''}, मैं Priya बोल रही हूँ Your Store से। आपके order के confirmation के लिए call किया है।`;
+  return `नमस्ते${address ? ' ' + address : ''}, मैं Priya बोल रही हूँ ${v.store_name} से। आपके order के confirmation के लिए call किया है।`;
+}
+
+/** "a" / "an" for English category phrases. "online store" → "an" only if
+ *  first word starts with a vowel. Keeps prompt grammatical across
+ *  "online fashion store", "ayurvedic pet brand", etc. */
+function articleFor(s) {
+  return /^[aeiou]/i.test(String(s || '').trim()) ? 'an' : 'a';
 }
 
 // --- Tools -----------------------------------------------------------------
@@ -317,6 +324,12 @@ export default defineAgent({
       delivery_area:    attrs.delivery_area    || '',
       shop:             attrs.shop             || '',
       shopify_order_id: attrs.shopify_order_id || '',
+      // Brand context — passed per-call via participant attributes, with env
+      // fallback for single-tenant deployments. For multi-tenant, resolve
+      // per-shop (e.g. from a Shopify metafield) in trigger-livekit-call.js
+      // and pass `store_name` / `store_category` in participantAttributes.
+      store_name:       attrs.store_name       || process.env.STORE_NAME     || 'our store',
+      store_category:   attrs.store_category   || process.env.STORE_CATEGORY || 'online store',
     };
     console.log(`[livekit-agent] call for ${v.customer_name} / ${v.order_number} (${v.shop}) lang=${lang}`);
 

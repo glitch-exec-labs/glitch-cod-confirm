@@ -76,6 +76,12 @@ export async function triggerLivekitCall({ phone, order, lang, roomName }) {
         shop:             order.shop || '',
         shopify_order_id: String(order.id || ''),
         language:         lang === 'en-IN' ? 'en-IN' : 'hi-IN',
+        // Brand context. Caller-passed order.storeName wins, else STORE_NAME
+        // env, else the agent defaults to "our store" (see livekit-agent.js).
+        // For multi-tenant, resolve per-shop (e.g. from a Shopify metafield)
+        // and pass in via order.storeName / order.storeCategory.
+        store_name:       order.storeName     || process.env.STORE_NAME     || '',
+        store_category:   order.storeCategory || process.env.STORE_CATEGORY || '',
       },
       playRingtone: true,
       ringingTimeout: 30,

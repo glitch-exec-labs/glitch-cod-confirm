@@ -1,5 +1,8 @@
 /**
- * One-time setup: creates the Retell LLM + Agent for Your Store COD confirmation.
+ * (LEGACY — kept for reference.) One-time setup: creates the Retell LLM +
+ * Agent for the store configured via STORE_NAME. Retell path was superseded
+ * by LiveKit + Sarvam for production; we keep this to make it easy to swap
+ * back or fork for ElevenLabs-based deployments.
  *
  * Run: `node src/setup-retell-agent.mjs` (after `pnpm install`).
  *
@@ -9,8 +12,10 @@
  * via Retell dashboard. For updates, use update-retell-llm / update-agent.
  */
 
-const RETELL_API_KEY = process.env.RETELL_API_KEY;
-const SERVER_URL = process.env.SERVER_URL || 'https://your-domain.com/cod-confirm';
+const RETELL_API_KEY   = process.env.RETELL_API_KEY;
+const SERVER_URL       = process.env.SERVER_URL     || 'https://your-domain.com/cod-confirm';
+const STORE_NAME       = process.env.STORE_NAME     || 'our store';
+const STORE_CATEGORY   = process.env.STORE_CATEGORY || 'online store';
 
 if (!RETELL_API_KEY) { console.error('Missing RETELL_API_KEY'); process.exit(1); }
 
