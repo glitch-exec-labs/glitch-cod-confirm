@@ -37,6 +37,9 @@ import { z } from 'zod';
 
 const WEBHOOK_BASE = process.env.COD_CONFIRM_WEBHOOK_BASE
   || 'https://your-domain.com/cod-confirm';
+// Shared secret matched against LIVEKIT_TOOL_SECRET on the Express side
+// (requireLivekitToolAuth). Without this, /webhook/livekit/tool/* rejects us.
+const TOOL_SECRET = process.env.LIVEKIT_TOOL_SECRET || '';
 
 // --- Prompt ----------------------------------------------------------------
 
@@ -210,7 +213,11 @@ function buildTools(v) {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Authenticate to /webhook/livekit/tool/* (issue #8).
+          ...(TOOL_SECRET ? { 'X-COD-Tool-Secret': TOOL_SECRET } : {}),
+        },
         body: JSON.stringify({
           shop: v.shop,
           shopify_order_id: v.shopify_order_id,
@@ -219,14 +226,17 @@ function buildTools(v) {
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        console.error(`[tool ${name}] HTTP ${res.status}:`, data);
-        return `Tool ${name} failed: ${data.error || res.status}`;
+      // Issue #7: previously the agent trusted any 2xx. The backend used to
+      // return 200 + {ok:false} on real failures, which the agent reported as
+      // success to the customer. Now validate BOTH res.ok AND data.ok === true.
+      if (!res.ok || data.ok !== true) {
+        console.error(`[tool ${name}] FAILED http=${res.status} ok=${data.ok}:`, data);
+        return `Tool ${name} failed: ${data.error || `HTTP ${res.status}`}. Do NOT tell the customer this succeeded.`;
       }
       return `Tool ${name} OK. ${data.tag_applied ? `Tag ${data.tag_applied} applied.` : ''}`;
     } catch (err) {
       console.error(`[tool ${name}] error:`, err);
-      return `Tool ${name} errored: ${err.message}`;
+      return `Tool ${name} errored: ${err.message}. Do NOT tell the customer this succeeded.`;
     }
   }
 

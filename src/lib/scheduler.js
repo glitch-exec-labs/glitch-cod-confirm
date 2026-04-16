@@ -136,8 +136,15 @@ async function dispatchOne(prisma, row, onFinalFail) {
   }
 
   // ── LIVE PATH ─────────────────────────────────────────────────────
+  // Split into two phases (issue #10):
+  //   1. Place the outbound call. Failures here are "real" dispatch failures
+  //      — requeue with backoff.
+  //   2. Persist the attempt + update the scheduled row. Failures here happen
+  //      AFTER the customer's phone may already be ringing. We MUST NOT
+  //      auto-retry in that case, because we would place a duplicate call.
+  let placement;
   try {
-    const result = await triggerLivekitCall({
+    placement = await triggerLivekitCall({
       phone: row.phone,
       lang:  row.lang,
       order: {
@@ -151,29 +158,41 @@ async function dispatchOne(prisma, row, onFinalFail) {
         area:         payload.delivery_area,
       },
     });
+  } catch (err) {
+    console.error(`[scheduler] dispatch failed ${row.orderName}:`, err?.message || err);
+    await handleFailure(prisma, row, err?.message || String(err), onFinalFail);
+    return;
+  }
 
-    const roomName = result?.room_name || null;
-    const sipCallId = result?.sip?.sipCallId || result?.sip?.sip_call_id || null;
+  // ── From here, the call was placed. Any failure below is POST-PLACEMENT
+  //    bookkeeping and must NOT auto-requeue. Log loudly for manual recovery
+  //    and leave the row in 'dispatching' so the stuck-sweep handles it only
+  //    after STUCK_AFTER_MS with no terminal outcome — by which time the
+  //    LiveKit tool webhooks will likely have landed an outcome anyway.
+  const roomName = placement?.room_name || null;
+  const sipCallId = placement?.sip?.sipCallId || placement?.sip?.sip_call_id || null;
 
-    // Record the attempt
+  try {
     await prisma.callAttempt.create({
       data: {
         shop: row.shop, orderId: row.orderId, orderName: row.orderName,
         phone: row.phone, roomName, sipCallId,
       },
     });
-
-    // Keep status=dispatching; terminal outcome set by LiveKit tool webhooks
-    // (confirm/cancel/agent/callback) or the stuck-sweep on no-response.
     await prisma.scheduledCall.update({
       where: { id: row.id },
       data:  { roomName, sipCallId, attempts: { increment: 1 } },
     });
-
     console.log(`[scheduler] dispatched ${row.orderName} (${row.shop}) attempt=${row.attempts + 1} room=${roomName}`);
   } catch (err) {
-    console.error(`[scheduler] dispatch failed ${row.orderName}:`, err?.message || err);
-    await handleFailure(prisma, row, err?.message || String(err), onFinalFail);
+    // Call is already live externally. Do NOT call handleFailure(), do NOT
+    // requeue. Dump everything needed for manual reconciliation and move on.
+    console.error(
+      `[scheduler] POST-DISPATCH BOOKKEEPING FAILED for ${row.orderName} (${row.shop})` +
+      ` — call was already placed (room=${roomName} sipCallId=${sipCallId}).` +
+      ` NOT auto-retrying to avoid a duplicate call. Manual review needed.` +
+      ` scheduledCall.id=${row.id} error=${err?.message || err}`
+    );
   }
 }
 
@@ -244,18 +263,31 @@ export async function markScheduledCallOutcome(prisma, { shop, orderId, outcome,
   if (!shop || !orderId || !outcome) return null;
   const row = await prisma.scheduledCall.findUnique({ where: { shop_orderId: { shop, orderId: String(orderId) } } });
   if (!row) return null;
-  if (row.outcome) return row; // already terminal
 
-  const updated = await prisma.scheduledCall.update({
-    where: { id: row.id },
+  // Issue #11: atomic conditional update. The previous read-then-write could
+  // race — two tool callbacks both observing outcome:null would both write,
+  // letting the later call overwrite the first terminal outcome. updateMany
+  // with outcome:null in the filter is a single SQL UPDATE ... WHERE outcome
+  // IS NULL, so only the first write commits. The count tells us whether
+  // WE were that first write.
+  const claim = await prisma.scheduledCall.updateMany({
+    where: { id: row.id, outcome: null },
     data: {
-      status:  'done',
+      status:    'done',
       outcome,
       lastError: null,
     },
   });
 
-  // Also close the latest attempt record
+  if (claim.count === 0) {
+    // Someone else got here first. Re-fetch for the current terminal state
+    // and return it as a no-op — do NOT close an attempt either.
+    const existing = await prisma.scheduledCall.findUnique({ where: { id: row.id } });
+    console.log(`[scheduler] outcome=${outcome} ignored for ${shop}/${orderId} — already terminal (${existing?.outcome})`);
+    return existing;
+  }
+
+  // We won the race — close the latest attempt record with OUR outcome.
   const latestAttempt = await prisma.callAttempt.findFirst({
     where: { shop, orderId: String(orderId), endedAt: null },
     orderBy: { startedAt: 'desc' },
@@ -268,5 +300,5 @@ export async function markScheduledCallOutcome(prisma, { shop, orderId, outcome,
   }
 
   console.log(`[scheduler] outcome=${outcome} recorded for ${shop}/${orderId}`);
-  return updated;
+  return prisma.scheduledCall.findUnique({ where: { id: row.id } });
 }
