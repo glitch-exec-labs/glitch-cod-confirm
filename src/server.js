@@ -66,9 +66,13 @@ app.get('/health', async (_req, res) => {
 // ─── Shopify webhook: new order created ────────────────
 app.post('/webhook/shopify/orders-create', (req, res) => {
   try {
-    // Verify HMAC if secret is set
+    // Verify HMAC — reject if secret is configured but header is missing
     const hmac = req.get('X-Shopify-Hmac-Sha256');
-    if (SHOPIFY_WEBHOOK_SECRET && hmac) {
+    if (SHOPIFY_WEBHOOK_SECRET) {
+      if (!hmac) {
+        console.warn('[shopify-webhook] HMAC header missing — rejecting');
+        return res.status(401).send('HMAC required');
+      }
       const expected = crypto.createHmac('sha256', SHOPIFY_WEBHOOK_SECRET).update(req.body).digest('base64');
       if (expected !== hmac) {
         console.warn('[shopify-webhook] HMAC mismatch');
@@ -78,7 +82,10 @@ app.post('/webhook/shopify/orders-create', (req, res) => {
     const order = JSON.parse(req.body.toString('utf8'));
     const shop = req.get('X-Shopify-Shop-Domain');
 
-    const isCod = (order.payment_gateway_names || order.gateway || '').toLowerCase().includes('cod')
+    const gateways = Array.isArray(order.payment_gateway_names)
+      ? order.payment_gateway_names.join(',')
+      : (order.payment_gateway_names || order.gateway || '');
+    const isCod = gateways.toLowerCase().includes('cod')
       || (order.note_attributes || []).some(a => (a.name || a.key) === 'Payment Gateway' && (a.value === '-' || !a.value));
 
     if (!isCod) {
@@ -157,7 +164,7 @@ async function triggerCall(order, shop) {
 // ─── Retell webhooks ────────────────────────────────────
 async function updateOrderTag(shop, orderId, tag, note) {
   const session = await prisma.session.findFirst({ where: { shop, isOnline: false } });
-  if (!session) { console.error(`[shopify] no session for ${shop}`); return; }
+  if (!session) { throw new Error(`No offline Shopify session for ${shop} — tag writeback failed`); }
   const gid = `gid://shopify/Order/${orderId}`;
   const query = `mutation($id: ID!, $tags: [String!]!, $note: String) {
     orderUpdate(input: { id: $id, tags: $tags, note: $note }) {
