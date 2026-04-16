@@ -13,7 +13,22 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-16
 
-- **20:30 UTC** — auto-sync: 2026-04-16 20:30 UTC (`06b5846`) — 3 files
+- **20:45 UTC** — auto-sync: 2026-04-16 20:45 UTC (`e321180`) — 3 files
+        M	MILESTONES.md
+        M	README.md
+        M	src/setup-bolna-agent.mjs
+- **20:33 UTC** — Genericize store brand, scrub client references for public-repo readiness (`a2fed4e`) — 9 files
+    Completes the genericization pass started in 995c7f3 (auto-sync picked up
+    the agent/trigger-call/retell-setup changes before a human commit landed).
+    Prompts, welcomes, and agent names now read from STORE_NAME / STORE_CATEGORY
+    env vars (single-tenant default) or from order.storeName / order.storeCategory
+    participant attributes (multi-tenant path, resolved per-shop by the caller of
+    triggerLivekitCall). Default STORE_NAME="our store", STORE_CATEGORY="online
+    store" so the agent degrades gracefully if the env is unset.
+    Touched in 995c7f3:
+    - src/livekit-agent.js      — store_name/store_category threaded through
+                                  Hindi + English prompts, welcome, attrs. New
+- **20:30 UTC** — auto-sync: 2026-04-16 20:30 UTC (`995c7f3`) — 4 files
         M	src/livekit-agent.js
         M	src/setup-retell-agent.mjs
         M	src/trigger-livekit-call.js
