@@ -24,11 +24,11 @@ on every push). This file is human-kept, permanent, and survives the sync.
 ## 2026-04-15 — LiveKit + Sarvam Bulbul v3 stack, native 8 kHz win
 
 **Scope:** rebuild Priya on LiveKit Agents JS (Node.js) + Sarvam Bulbul v3 TTS
-+ Sarvam Saaras v3 STT + GPT-4o-mini LLM + Vobiz SIP trunk. Ditch Bolna
-entirely after three independent Bolna bugs blocked progress.
++ Sarvam Saaras v3 STT + GPT-4o-mini LLM + Vobiz SIP trunk. Migrate off the
+prior managed platform after we hit limits we couldn't work around in time.
 
 **Stack pieces now in production:**
-- Agent: Bolna (decommissioned) → `cod-confirm-priya` (LiveKit, alive)
+- Agent: prior managed platform → `cod-confirm-priya` (LiveKit, alive)
 - Telephony: Vobiz SIP trunk via LiveKit outbound trunk. DLT-registered caller-ID.
 - TTS: Sarvam Bulbul v3, voice `neha`, **`sampleRate: 8000` native** — skips
   the 24k→8k resample that was the root cause of "sounds like a bot".
@@ -47,9 +47,10 @@ Shopify-derived participant attributes so Priya knows customer name / order #
 / amount / product / address.
 
 **What moved the needle today:**
-1. **Skipping Bolna** — their `api_tools` validator is broken (NoneType 500s
-   on every shape), Vobiz uplink was silently lost, and Twilio calls queued
-   forever without dispatching. 3 hours down before switching.
+1. **Moving to LiveKit + self-hosted agent worker** — gave us direct control
+   over the audio pipeline, tool configuration, and call dispatch. The
+   managed option we tried first couldn't meet our bar in time; LiveKit +
+   Sarvam let us ship.
 2. **Getting Sarvam v3 voice names right** — `anushka` / `manisha` /
    `vidya` / `arya` are v1/v2 legacy voices that Sarvam's REST API accepts
    but its **WebSocket streaming endpoint rejects with 422**. Native v3
@@ -93,18 +94,19 @@ Hindi words, plus ~2× cost per minute. Not worth doing until a client asks.
 
 ---
 
-## 2026-04-15 (earlier) — Bolna dead end, Retell + ElevenLabs baseline
+## 2026-04-15 (earlier) — Managed-platform baselines, then pivot to self-hosted
 
-- Started day with Retell + ElevenLabs Monika `eleven_turbo_v2_5` — user
-  feedback: "voice feels too chopy and looks like ai bot".
-- Tuned Retell (multilingual_v2, lower interruption sensitivity, ambient
-  call-center noise, Hindi backchannels, slower speed, normalised speech) —
-  marginal improvement, still bot-like.
-- Researched who cracked Indian voice AI: Sarvam Bulbul v3 wins 8 kHz Hindi
-  telephony benchmarks (beat ElevenLabs v3 and Cartesia Sonic-3). Bolna
-  natively wraps Sarvam. Pivoted to Bolna.
-- Bolna blockers (see above): `api_tools` broken, Vobiz uplink broken,
-  Twilio queue stuck. Pivoted to LiveKit.
+- Tried a managed voice-agent platform with ElevenLabs TTS over the Indian
+  PSTN leg. Voice quality wasn't where we needed it for our use case —
+  couldn't hit the naturalness bar even after tuning interruption
+  sensitivity, backchannels, speed, normalisation, and ambient noise.
+- Researched Hindi telephony TTS — Sarvam Bulbul v3 kept coming up as the
+  strongest option for 8 kHz Hindi prosody (ahead of ElevenLabs v3 and
+  Cartesia Sonic-3 on the benchmarks we cared about). Tried a different
+  managed platform that wraps Sarvam natively.
+- Hit limits on that platform around tool configuration and SIP dispatch
+  we couldn't work around in time. Pivoted to self-hosted LiveKit + Sarvam,
+  which is where we ended the day.
 
 ---
 

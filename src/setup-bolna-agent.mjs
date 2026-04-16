@@ -4,9 +4,8 @@
  * + Sarvam for production; we keep this as a reference for teams that want
  * to fork Bolna-based deployments.
  *
- * Why Bolna: Sarvam Bulbul v3 wins 8 kHz telephony benchmarks for Hindi.
- * ElevenLabs Monika / Cartesia Sonic-3 (via Retell) are tuned for studio
- * audio — over a phone line they sound choppy and "AI-botty".
+ * Why the Sarvam path: Bulbul v3 gave the best 8 kHz Hindi telephony
+ * prosody of the options we benchmarked for our use case.
  *
  * Run:
  *   node -r dotenv/config src/setup-bolna-agent.mjs dotenv_config_path=.env

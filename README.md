@@ -60,11 +60,13 @@ LiveKit's Sarvam plugin defaults to 24kHz output, which gets resampled down to 8
 **Why Devanagari in the system prompt:**
 Hindi prompts are written in Devanagari script (`के लिए`), not Latin transliteration (`ke liye`). Bulbul v3 handles Devanagari natively with correct vowel length and stress. Latin transliteration caused mispronunciations like "thi liye" in testing.
 
-**Why LiveKit over Bolna/Retell:**
-We evaluated three platforms before settling on LiveKit:
-- **Retell + ElevenLabs**: User feedback was "voice feels too choppy and looks like AI bot"
-- **Bolna + Sarvam**: Three independent bugs blocked go-live (broken `api_tools` validator, silent Vobiz uplink failure, Twilio queue stall)
-- **LiveKit + Sarvam**: Full control over audio pipeline, native 8kHz output, self-hosted agent worker. First real PSTN test feedback: "much better than all previous tests"
+**Why we picked LiveKit + Sarvam:**
+We evaluated a few managed voice-agent platforms alongside LiveKit and picked LiveKit for our specific Indian-telephony use case. The short version:
+- End-to-end control over the audio pipeline, including native 8 kHz TTS output for the SIP leg.
+- Self-hosted agent worker — predictable latency, straightforward observability, easy to extend with mid-call tools.
+- Sarvam Bulbul v3 gave the best Hindi phone-line prosody of what we tried.
+
+Managed platforms are a perfectly reasonable fit when the above isn't required; we just hit the limits of ours for this workload.
 
 ## Setup
 
