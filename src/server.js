@@ -317,6 +317,80 @@ app.post('/webhook/livekit/tool/request_human_agent', requireLivekitToolAuth, (r
 app.post('/webhook/livekit/tool/request_callback', requireLivekitToolAuth, (req, res) =>
   livekitTagUpdate(req, res, 'request_callback', b => `Customer asked callback: ${b.when || 'time not specified'}`));
 
+// ─── Training-data moat: per-turn transcript capture ────────────────
+// The LiveKit agent worker posts one row per utterance as the call unfolds.
+// Persisting mid-call (rather than one bulk dump at session Close) means a
+// worker crash or an unclean hangup doesn't lose the first half of the
+// conversation. Auth: same shared secret as the tool webhooks.
+app.post('/webhook/livekit/turn', requireLivekitToolAuth, async (req, res) => {
+  const b = req.body || {};
+  if (!b.shop || !b.shopify_order_id || !b.room_name || b.turn_index == null || !b.role || typeof b.text !== 'string') {
+    return res.status(400).json({ ok: false, error: 'missing shop/shopify_order_id/room_name/turn_index/role/text' });
+  }
+  if (!['user', 'assistant', 'tool'].includes(b.role)) {
+    return res.status(400).json({ ok: false, error: `invalid role: ${b.role}` });
+  }
+  try {
+    // @@unique([roomName, turnIndex]) + upsert gives us at-least-once safety
+    // if the agent retries a POST that actually succeeded.
+    await prisma.callTurn.upsert({
+      where: { roomName_turnIndex: { roomName: b.room_name, turnIndex: b.turn_index } },
+      update: {}, // first write wins; a retry is a no-op
+      create: {
+        shop:          b.shop,
+        orderId:       String(b.shopify_order_id),
+        roomName:      b.room_name,
+        sipCallId:     b.sip_call_id || null,
+        turnIndex:     b.turn_index,
+        role:          b.role,
+        text:          b.text,
+        toolName:      b.tool_name || null,
+        toolArgs:      b.tool_args || undefined,
+        toolResult:    b.tool_result || null,
+        lang:          b.lang || null,
+        sttConfidence: typeof b.stt_confidence === 'number' ? b.stt_confidence : null,
+        startedAt:     b.started_at ? new Date(b.started_at) : new Date(),
+      },
+    });
+    // Cheap denormalized counter so dataset queries can filter "calls with
+    // ≥ N turns" without a subquery.
+    await prisma.callAttempt.updateMany({
+      where: { roomName: b.room_name },
+      data:  { turnCount: { increment: 1 } },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[livekit-turn] error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// LiveKit Egress callback — fired by LiveKit Cloud when a room-composite
+// audio recording finishes uploading to our configured cloud-storage bucket.
+// We keep the pointer on CallAttempt so the training-export job can later
+// join (audio, transcript, outcome).
+app.post('/webhook/livekit/egress-ready', requireLivekitToolAuth, async (req, res) => {
+  const b = req.body || {};
+  const roomName = b.room_name || b.roomName;
+  if (!roomName) return res.status(400).json({ ok: false, error: 'missing room_name' });
+  try {
+    const updated = await prisma.callAttempt.updateMany({
+      where: { roomName },
+      data: {
+        audioUri:        b.audio_uri || b.audioUri || null,
+        audioFormat:     b.format || null,
+        audioDurationMs: typeof b.duration_ms === 'number' ? b.duration_ms : null,
+        audioSampleRate: typeof b.sample_rate === 'number' ? b.sample_rate : null,
+      },
+    });
+    console.log(`[livekit-egress] room=${roomName} audio=${b.audio_uri || b.audioUri} rows=${updated.count}`);
+    res.json({ ok: true, rows_updated: updated.count });
+  } catch (err) {
+    console.error('[livekit-egress] error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // LiveKit room-event webhook (optional — safety net for visibility)
 app.post('/webhook/livekit/room-event', (req, res) => {
   const ev = req.body || {};

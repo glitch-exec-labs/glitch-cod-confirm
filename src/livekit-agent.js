@@ -189,15 +189,23 @@ function englishRupees(n) {
 
 function buildWelcome(v, lang) {
   const hasRealName = v.customer_name && v.customer_name !== 'Customer';
+  // Recording-consent notice. On by default for DPDP (India) / general
+  // best practice; set RECORDING_CONSENT_DISCLOSURE=off only if your
+  // deployment has consent captured out-of-band (e.g. on the Shopify
+  // checkout page) or is running against test numbers.
+  const withConsent = (process.env.RECORDING_CONSENT_DISCLOSURE || 'on').toLowerCase() !== 'off';
+
   if (lang === 'en-IN') {
     const address = hasRealName ? v.customer_name : '';
-    return `Hello${address ? ' ' + address : ''}, this is Priya calling from ${v.store_name}. I'm calling to confirm your recent order.`;
+    const consent = withConsent ? ' This call may be recorded for quality and service improvement.' : '';
+    return `Hello${address ? ' ' + address : ''}, this is Priya calling from ${v.store_name}. I'm calling to confirm your recent order.${consent}`;
   }
   // Hindi / Hinglish — written in DEVANAGARI so Bulbul v3 renders natively.
   // "के लिए" in Devanagari avoids Latin-transliteration drift that produced
   // "thi liye" in earlier tests.
   const address = hasRealName ? `${v.customer_name} जी` : '';
-  return `नमस्ते${address ? ' ' + address : ''}, मैं Priya बोल रही हूँ ${v.store_name} से। आपके order के confirmation के लिए call किया है।`;
+  const consent = withConsent ? ' यह call quality के लिए record की जा रही है।' : '';
+  return `नमस्ते${address ? ' ' + address : ''}, मैं Priya बोल रही हूँ ${v.store_name} से। आपके order के confirmation के लिए call किया है।${consent}`;
 }
 
 /** "a" / "an" for English category phrases. "online store" → "an" only if
@@ -333,6 +341,51 @@ export default defineAgent({
     };
     console.log(`[livekit-agent] call for ${v.customer_name} / ${v.order_number} (${v.shop}) lang=${lang}`);
 
+    // ── Training-data moat: real-time turn persistence ──────────────────
+    // Captures every user utterance, every assistant utterance, and every
+    // tool call to Postgres via POST /webhook/livekit/turn. Paired with the
+    // room-composite audio egress started in trigger-livekit-call.js, this
+    // produces (audio, transcript, outcome) tuples for later training.
+    //
+    // - turnIndex is an in-worker monotonic counter. Unique across a single
+    //   session; uniqueness across retries is enforced by the server's
+    //   @@unique([roomName, turnIndex]) + upsert.
+    // - postTurn is fire-and-forget: we do not block the voice pipeline on
+    //   persistence. Failures log but don't bubble up.
+    let turnIndex = 0;
+    const roomName = ctx.room?.name || '';
+    const sipCallId = attrs.sip_call_id || null;
+    async function postTurn({ role, text, tool_name, tool_args, tool_result, stt_confidence }) {
+      if (!v.shop || !v.shopify_order_id || !roomName) return; // test/demo calls without order context — skip
+      const payload = {
+        shop:              v.shop,
+        shopify_order_id:  v.shopify_order_id,
+        room_name:         roomName,
+        sip_call_id:       sipCallId,
+        turn_index:        turnIndex++,
+        role,
+        text:              text || '',
+        lang,
+        tool_name, tool_args, tool_result, stt_confidence,
+        started_at:        new Date().toISOString(),
+      };
+      try {
+        const res = await fetch(`${WEBHOOK_BASE}/webhook/livekit/turn`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(TOOL_SECRET ? { 'X-COD-Tool-Secret': TOOL_SECRET } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          console.warn(`[turn-persist] HTTP ${res.status} for ${role} turn #${payload.turn_index}`);
+        }
+      } catch (err) {
+        console.warn(`[turn-persist] fire-and-forget error on ${role} turn #${payload.turn_index}:`, err.message);
+      }
+    }
+
     const agent = new voice.Agent({
       instructions: buildSystemPrompt(v, lang),
       tools: buildTools(v),
@@ -368,18 +421,38 @@ export default defineAgent({
       preemptiveGeneration: true,    // default; false caused >10s startup delay, users hung up before greeting
     });
 
-    // Observability — not load-bearing, but useful in journalctl.
+    // Each event handler persists to Postgres AND still logs to journalctl
+    // so on-the-fly debugging remains zero-friction.
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
-      if (ev.isFinal) console.log(`[user] ${ev.transcript}`);
+      if (!ev.isFinal) return;
+      console.log(`[user] ${ev.transcript}`);
+      postTurn({
+        role: 'user',
+        text: ev.transcript || '',
+        stt_confidence: typeof ev.confidence === 'number' ? ev.confidence : undefined,
+      });
     });
     session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
-      if (ev.item?.role === 'assistant') console.log(`[priya] ${ev.item.content?.slice?.(0, 200) ?? ''}`);
+      if (ev.item?.role !== 'assistant') return;
+      const text = typeof ev.item.content === 'string' ? ev.item.content : '';
+      console.log(`[priya] ${text.slice(0, 200)}`);
+      postTurn({ role: 'assistant', text });
     });
     session.on(voice.AgentSessionEventTypes.FunctionToolsExecuted, (ev) => {
-      console.log('[tool]', ev.functionCalls?.map?.(c => c.name).join(',') || '?');
+      const calls = ev.functionCalls || [];
+      console.log('[tool]', calls.map(c => c.name).join(',') || '?');
+      for (const c of calls) {
+        postTurn({
+          role:        'tool',
+          text:        c.name || '',
+          tool_name:   c.name,
+          tool_args:   c.arguments ?? c.args ?? undefined,
+          tool_result: typeof c.result === 'string' ? c.result : (c.result ? JSON.stringify(c.result) : undefined),
+        });
+      }
     });
     session.on(voice.AgentSessionEventTypes.Close, () => {
-      console.log('[livekit-agent] session closed');
+      console.log(`[livekit-agent] session closed after ${turnIndex} turns`);
     });
 
     await session.start({ agent, room: ctx.room });
