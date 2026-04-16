@@ -45,8 +45,14 @@ export function normalizePhone(raw) {
     return '+91' + s;
   }
 
-  // Anything else: treat as "unknown international", require it matches E.164
-  if (/^[1-9]\d{6,14}$/.test(s)) {
+  // Bare 10-digit that's NOT an Indian mobile — ambiguous, reject.
+  // (A valid international number without + should have a country code
+  // making it longer than 10 digits.)
+  if (s.length === 10) return null;
+
+  // Longer digit strings: treat as "international without +", require
+  // it matches E.164 shape.
+  if (/^[1-9]\d{6,14}$/.test(s) && s.length > 10) {
     return '+' + s;
   }
 
