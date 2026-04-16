@@ -66,7 +66,7 @@ async function patchAgent() {
     backchannel_frequency: 0.6,
     backchannel_words: ['haan', 'hmm', 'achha', 'ji'],
     normalize_for_speech: true,
-    boosted_keywords: ['Your Store', 'Priya', 'COD', 'Hinglish', 'Namaste', 'Dhanyawaad'],
+    boosted_keywords: [process.env.STORE_NAME || 'our store', 'Priya', 'COD', 'Hinglish', 'Namaste', 'Dhanyawaad'],
     ambient_sound: 'call-center',
     ambient_sound_volume: 0.3,
   });

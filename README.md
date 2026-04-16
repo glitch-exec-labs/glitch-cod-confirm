@@ -203,7 +203,7 @@ systemd/
 
 ## Adapting for your store
 
-1. **Brand name**: Search for "Your Store" in `src/livekit-agent.js` and replace with your store name
+1. **Brand name**: Set `STORE_NAME` and `STORE_CATEGORY` in `.env` — these feed the Hindi + English prompts in `src/livekit-agent.js` at runtime, no code edits needed
 2. **Prompts**: Edit `hindiPrompt()` and `englishPrompt()` in `src/livekit-agent.js`
 3. **Voice**: Change the `speaker` option in the TTS config. See the comment in the source for the full list of Bulbul v3 voices
 4. **Language**: Add more languages by extending `buildSystemPrompt()` and `buildWelcome()` with new language branches

@@ -1,6 +1,7 @@
 # Milestones — Glitch COD Confirm (Priya voice agent)
 
-Hand-curated log of the voice-AI iteration for Your Store COD confirmation.
+Hand-curated log of the voice-AI iteration for COD confirmation on an Indian
+Shopify store.
 Complements the auto-generated `CHANGELOG.md` (which is reset from `git log`
 on every push). This file is human-kept, permanent, and survives the sync.
 
@@ -84,7 +85,7 @@ Shopify-derived participant attributes so Priya knows customer name / order #
 ## Deferred / known bot-ceiling
 
 Sarvam Bulbul v3 streaming at 8 kHz is now indistinguishable-enough for
-Your Store COD. If a future client demands "cannot tell it's AI" quality,
+the current deployment. If a future client demands "cannot tell it's AI" quality,
 the next jump is **OpenAI Realtime** (speech-to-speech via
 `openai.realtime.RealtimeModel`) — one-file swap in `src/livekit-agent.js`,
 with a tradeoff: native-sounding English but a subtle non-Indian accent on

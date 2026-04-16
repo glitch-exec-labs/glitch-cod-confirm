@@ -30,7 +30,7 @@ async function r(path, body, method = 'POST') {
   return json;
 }
 
-const SYSTEM_PROMPT = `You are Priya, a warm and professional customer service agent calling from Your Store — an online fashion store in India.
+const SYSTEM_PROMPT = `You are Priya, a warm and professional customer service agent calling from ${STORE_NAME} — a ${STORE_CATEGORY}.
 
 Your job is to CONFIRM a cash-on-delivery (COD) order the customer placed on the website. You speak naturally in Hinglish (the Hindi-English code-mix most Indian customers use). Keep it short, warm, and polite.
 
@@ -44,7 +44,7 @@ Context given at call start (use these values, do NOT invent):
 ## Call flow
 
 **Greeting (one sentence):**
-"Namaste {{customer_name}} ji, main Priya bol rahi hoon Your Store se."
+"Namaste {{customer_name}} ji, main Priya bol rahi hoon ${STORE_NAME} se."
 
 **Confirm order details:**
 "Aapne {{order_number}} par {{product_name}} order kiya hai, total ₹{{total_amount}} — delivery {{delivery_area}}, {{delivery_city}} pe hogi, COD pe. Confirm kar doon?"
@@ -60,7 +60,7 @@ Context given at call start (use these values, do NOT invent):
 - "Kitne paise dene hain?" → repeat total amount and delivery address.
 - "Kab aayega?" → "Aapko 5-7 din mein deliver ho jayega."
 - "Return policy kya hai?" → "7 din ke andar return kar sakte hain, easy process."
-- "Ye call asli hai?" → "Bilkul, Your Store ki taraf se. Aapke order number {{order_number}} ke baare mein call ki hai."
+- "Ye call asli hai?" → "Bilkul, ${STORE_NAME} ki taraf se. Aapke order number {{order_number}} ke baare mein call ki hai."
 
 **Rules:**
 - Speak naturally with warmth. Use natural pauses between clauses — do not clip sentences or sound scripted.
@@ -77,7 +77,7 @@ async function main() {
     model: 'gpt-4.1-mini',
     model_temperature: 0.6,
     general_prompt: SYSTEM_PROMPT,
-    begin_message: 'Namaste, main Priya bol rahi hoon Your Store se. Aapke order ke confirmation ke liye call kiya hai.',
+    begin_message: `Namaste, main Priya bol rahi hoon ${STORE_NAME} se. Aapke order ke confirmation ke liye call kiya hai.`,
     general_tools: [
       {
         type: 'end_call',
@@ -146,7 +146,7 @@ async function main() {
 
   console.log('Creating Retell Agent...');
   const agent = await r('/create-agent', {
-    agent_name: 'COD Confirm — Your Store (Priya)',
+    agent_name: `COD Confirm — ${STORE_NAME} (Priya)`,
     voice_id: '11labs-Monika',
     voice_model: 'eleven_multilingual_v2',
     voice_temperature: 1.0,
@@ -161,7 +161,7 @@ async function main() {
     backchannel_frequency: 0.6,
     backchannel_words: ['haan', 'hmm', 'achha', 'ji'],
     normalize_for_speech: true,
-    boosted_keywords: ['Your Store', 'Priya', 'COD', 'Hinglish', 'Namaste', 'Dhanyawaad'],
+    boosted_keywords: [STORE_NAME, 'Priya', 'COD', 'Hinglish', 'Namaste', 'Dhanyawaad'],
     ambient_sound: 'call-center',
     ambient_sound_volume: 0.3,
     voicemail_option: { action: { type: 'hangup' } },

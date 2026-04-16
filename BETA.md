@@ -14,10 +14,10 @@ Default if unset: `live` (so missing env doesn't surprise-disable production).
 
 ## Beta phase (current state)
 
-**Status:** `DISPATCH_MODE=dry_run` for `your-shop.myshopify.com` (Your Store).
+**Status:** `DISPATCH_MODE=dry_run` for `<your-shop>.myshopify.com`.
 
 What this means:
-- Real Shopify orders flow into our webhook
+- Real Shopify orders flow into your webhook
 - HMAC verification, allowlist, COD detection, phone normalization, DND
   window, idempotency, scheduler — every code path runs against real data
 - After the 10-minute delay, the scheduler "dispatches" but only **logs**
@@ -26,7 +26,7 @@ What this means:
 
 Use this phase to:
 1. Confirm real Shopify order webhooks arrive intact (HMAC matches)
-2. Validate phone numbers for Your Store customers normalize cleanly
+2. Validate your customers' phone numbers normalize cleanly
 3. See the actual call context Priya would receive (customer name, total,
    product, address) — catch any field-mapping bugs early
 4. Verify DND adjusts correctly for late-evening orders
@@ -43,7 +43,7 @@ sudo journalctl -u cod-confirm.service -f | grep -E "DRY-RUN|shopify|scheduler"
 
 ### Health snapshot
 ```bash
-curl -s https://shopify.glitchexecutor.com/cod-confirm/health | jq
+curl -s https://<your-server>/cod-confirm/health | jq
 ```
 Look for `"dispatch_mode": "dry_run"` and `"queue.doneToday"` count.
 
@@ -65,12 +65,11 @@ webhook secret (HMAC mismatch) or a leaked endpoint URL (random POSTs).
 
 ## Promotion to live
 
-When ready to flip Your Store to real calls:
+When ready to flip your store to real calls:
 
 ```bash
 # 1. Edit .env
-sudo -u support sed -i 's/^DISPATCH_MODE=dry_run/DISPATCH_MODE=live/' \
-  /home/support/glitch-cod-confirm/.env
+sed -i 's/^DISPATCH_MODE=dry_run/DISPATCH_MODE=live/' /path/to/glitch-cod-confirm/.env
 
 # 2. Restart
 sudo systemctl restart cod-confirm.service
@@ -80,11 +79,11 @@ sudo journalctl -u cod-confirm.service -n 10 | grep "DISPATCH MODE"
 # Expect: 🟢 LIVE — real customer calls will be placed
 
 # 4. Confirm health
-curl -s https://shopify.glitchexecutor.com/cod-confirm/health | jq .dispatch_mode
+curl -s https://<your-server>/cod-confirm/health | jq .dispatch_mode
 # Expect: "live"
 ```
 
-After flipping live, the next COD order on Your Store will result in a
+After flipping live, the next COD order on your store will result in a
 real customer call ~10 minutes later.
 
 ## Rollback to dry-run
@@ -110,7 +109,7 @@ Before flipping to `live` for the first time:
 - [ ] One end-to-end test call placed via `flow-test-livekit` to a known
       Indian phone (you or a teammate) — confirm Priya speaks correctly,
       confirms the order, tags Shopify
-- [ ] Decision: notify Your Store that real calls will start
+- [ ] Decision: notify the store owner that real calls will start
 
 ---
 

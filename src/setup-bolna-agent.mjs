@@ -1,5 +1,8 @@
 /**
- * Creates the Bolna voice AI agent for Your Store COD confirmation.
+ * (LEGACY — kept for reference.) Creates a Bolna voice AI agent for the
+ * store configured via STORE_NAME. Bolna path was superseded by LiveKit
+ * + Sarvam for production; we keep this as a reference for teams that want
+ * to fork Bolna-based deployments.
  *
  * Why Bolna: Sarvam Bulbul v3 wins 8 kHz telephony benchmarks for Hindi.
  * ElevenLabs Monika / Cartesia Sonic-3 (via Retell) are tuned for studio
@@ -36,20 +39,22 @@
  *     In prompts and the welcome message, use `{variable}` (single brace).
  */
 
-const BOLNA_API_KEY = process.env.BOLNA_API_KEY;
-const BOLNA_API_BASE = process.env.BOLNA_API_BASE || 'https://api.bolna.dev';
-const SERVER_URL = process.env.SERVER_URL || 'https://your-domain.com/cod-confirm';
+const BOLNA_API_KEY    = process.env.BOLNA_API_KEY;
+const BOLNA_API_BASE   = process.env.BOLNA_API_BASE   || 'https://api.bolna.dev';
+const SERVER_URL       = process.env.SERVER_URL       || 'https://your-domain.com/cod-confirm';
+const STORE_NAME       = process.env.STORE_NAME       || 'our store';
+const STORE_CATEGORY   = process.env.STORE_CATEGORY   || 'online store';
 
 if (!BOLNA_API_KEY) { console.error('Missing BOLNA_API_KEY'); process.exit(1); }
 
-const AGENT_NAME = 'Glitch COD Confirm — Your Store (Priya, Sarvam)';
+const AGENT_NAME = `Glitch COD Confirm — ${STORE_NAME} (Priya, Sarvam)`;
 
-const WELCOME = 'Namaste {customer_name} ji, main Priya bol rahi hoon Your Store se. Aapke order ke confirmation ke liye call kiya hai.';
+const WELCOME = `Namaste {customer_name} ji, main Priya bol rahi hoon ${STORE_NAME} se. Aapke order ke confirmation ke liye call kiya hai.`;
 
 // Prompt designed for post-call disposition classification. No @tool mentions.
 // The agent just has a natural conversation; Bolna's post-call LLM reads the
 // transcript and decides confirmed / cancelled / agent-needed / callback.
-const SYSTEM_PROMPT = `You are Priya, a warm and professional customer service agent calling from Your Store — an online fashion store in India.
+const SYSTEM_PROMPT = `You are Priya, a warm and professional customer service agent calling from ${STORE_NAME} — a ${STORE_CATEGORY}.
 
 Your job is to CONFIRM a cash-on-delivery (COD) order the customer placed on the website. You speak naturally in Hinglish (the Hindi-English code-mix most Indian customers use). Be warm and relaxed — pause naturally between clauses. Do NOT sound scripted.
 
@@ -64,7 +69,7 @@ Your job is to CONFIRM a cash-on-delivery (COD) order the customer placed on the
 ## Call flow
 
 **Greeting:**
-"Namaste {customer_name} ji, main Priya bol rahi hoon Your Store se."
+"Namaste {customer_name} ji, main Priya bol rahi hoon ${STORE_NAME} se."
 
 **Confirm order details:**
 "Aapne {order_number} par {product_name} order kiya hai, total Rs. {total_amount} — delivery {delivery_area}, {delivery_city} pe hogi, COD pe. Confirm kar doon?"
@@ -80,7 +85,7 @@ Your job is to CONFIRM a cash-on-delivery (COD) order the customer placed on the
 - "Kitne paise dene hain?" → repeat total amount and delivery address.
 - "Kab aayega?" → "Aapko 5-7 din mein deliver ho jayega."
 - "Return policy kya hai?" → "7 din ke andar return kar sakte hain, easy process."
-- "Ye call asli hai?" → "Bilkul, Your Store ki taraf se. Aapke order number {order_number} ke baare mein call ki hai."
+- "Ye call asli hai?" → "Bilkul, ${STORE_NAME} ki taraf se. Aapke order number {order_number} ke baare mein call ki hai."
 
 **Rules:**
 - Speak naturally with warmth. Use natural pauses between clauses — do not clip sentences or sound scripted.
@@ -167,7 +172,7 @@ const AGENT_BODY = {
             encoding: 'linear16',
             sampling_rate: 16000,
             endpointing: 250,
-            keywords: 'Your Store, Priya, COD, Namaste, Dhanyawaad',
+            keywords: `${STORE_NAME}, Priya, COD, Namaste, Dhanyawaad`,
           },
           // See file-level comment #2 for why api_tools is left null.
         },
