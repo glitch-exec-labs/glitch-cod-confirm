@@ -34,6 +34,10 @@ const prisma = new PrismaClient();
 
 const PORT = Number(process.env.PORT || 3104);
 const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
+// Shared secret sent by the LiveKit agent worker on every /webhook/livekit/tool/*
+// request. If unset, the tool endpoints fail closed (reject everything) — no
+// silent open mode, because these endpoints mutate Shopify state.
+const LIVEKIT_TOOL_SECRET = process.env.LIVEKIT_TOOL_SECRET || '';
 const CALL_DELAY_MS = Number(process.env.CALL_DELAY_MS ?? 10 * 60_000); // 10 min default
 
 // Raw body needed for Shopify HMAC verification
@@ -41,7 +45,7 @@ app.use('/webhook/shopify', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 // Counters for /health
-let rejectCount = { hmac_missing: 0, hmac_mismatch: 0, shop_blocked: 0 };
+let rejectCount = { hmac_missing: 0, hmac_mismatch: 0, shop_blocked: 0, tool_auth_missing: 0, tool_auth_mismatch: 0 };
 
 // ─── Health ───────────────────────────────────────────────────────────
 app.get('/health', async (_req, res) => {
@@ -65,6 +69,7 @@ app.get('/health', async (_req, res) => {
       process.env.LIVEKIT_SIP_TRUNK_ID,
     ),
     shopify_hmac_configured: Boolean(SHOPIFY_WEBHOOK_SECRET),
+    livekit_tool_auth_configured: Boolean(LIVEKIT_TOOL_SECRET),
     allowed_shops: ALLOWLIST_ACTIVE ? ALLOWED_SHOPS : 'open',
     shopify_sessions: sessions,
     queue: { queued, dispatching, doneToday, failedToday },
@@ -103,12 +108,21 @@ app.post('/webhook/shopify/orders-create', async (req, res) => {
       return res.status(200).send('ok');
     }
 
-    // 3. COD detection — payment_gateway_names is typically an array
-    const gateways = Array.isArray(order.payment_gateway_names)
-      ? order.payment_gateway_names.join(',')
-      : (order.payment_gateway_names || order.gateway || '');
-    const isCod = gateways.toLowerCase().includes('cod')
-      || (order.note_attributes || []).some(a => (a.name || a.key) === 'Payment Gateway' && (a.value === '-' || !a.value));
+    // 3. COD detection — payment_gateway_names can be an array OR a string.
+    //    Normalize each entry: lowercase + strip non-alphanumerics so
+    //    "Cash on Delivery", "cash-on-delivery", "cashondelivery" and "COD"
+    //    all reduce to "cashondelivery" / "cod". `.includes('cod')` alone
+    //    missed "Cash on Delivery" entirely (see issue #9).
+    const gatewayList = Array.isArray(order.payment_gateway_names)
+      ? order.payment_gateway_names
+      : [order.payment_gateway_names || order.gateway || ''];
+    const normalize = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const isCod = gatewayList.some(g => {
+      const n = normalize(g);
+      return n === 'cod' || n.includes('cashondelivery');
+    }) || (order.note_attributes || []).some(a =>
+      (a.name || a.key) === 'Payment Gateway' && (a.value === '-' || !a.value)
+    );
 
     if (!isCod) {
       console.log(`[shopify] ${order.name} prepaid — skipping`);
@@ -173,15 +187,32 @@ async function updateOrderTag(shop, orderId, tag, note) {
     }
   }`;
 
-  // Fetch current tags/note to append (not replace)
+  // Fetch current tags/note to append (not replace). If this read fails or
+  // comes back malformed, ABORT — do not proceed to orderUpdate with empty
+  // fallbacks, because the subsequent write would wipe the existing tags/note
+  // (issue #12).
   const currResp = await fetchWithTimeout(`https://${shop}/admin/api/2024-10/graphql.json`, {
     method: 'POST',
     headers: { 'X-Shopify-Access-Token': session.accessToken, 'Content-Type': 'application/json' },
     body: JSON.stringify({ query: `{ order(id: "${gid}") { id tags note } }` }),
   });
-  const curr = await currResp.json().catch(() => null);
-  const existingTags = curr?.data?.order?.tags || [];
-  const existingNote = curr?.data?.order?.note || '';
+  if (!currResp.ok) {
+    throw new Error(`Shopify current-order read failed: HTTP ${currResp.status}`);
+  }
+  let curr;
+  try {
+    curr = await currResp.json();
+  } catch (err) {
+    throw new Error(`Shopify current-order read returned non-JSON: ${err.message}`);
+  }
+  if (curr?.errors?.length) {
+    throw new Error('Shopify current-order read errors: ' + curr.errors.map(e => e.message).join('; '));
+  }
+  if (!curr?.data?.order) {
+    throw new Error(`Shopify current-order read returned no order for ${gid}`);
+  }
+  const existingTags = curr.data.order.tags || [];
+  const existingNote = curr.data.order.note || '';
   const newTags = [...new Set([...existingTags, tag])];
   const newNote = [existingNote, note].filter(Boolean).join('\n\n').trim();
 
@@ -190,7 +221,15 @@ async function updateOrderTag(shop, orderId, tag, note) {
     headers: { 'X-Shopify-Access-Token': session.accessToken, 'Content-Type': 'application/json' },
     body: JSON.stringify({ query: mutation, variables: { id: gid, tags: newTags, note: newNote } }),
   });
-  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error(`Shopify orderUpdate failed: HTTP ${resp.status}`);
+  }
+  let data;
+  try {
+    data = await resp.json();
+  } catch (err) {
+    throw new Error(`Shopify orderUpdate returned non-JSON: ${err.message}`);
+  }
   if (data.errors?.length) {
     const errStr = data.errors.map(e => e.extensions?.code === 'ACCESS_DENIED'
       ? `ACCESS_DENIED (need ${e.extensions?.requiredAccess})`
@@ -218,37 +257,64 @@ const OUTCOME_TO_TAG = {
   no_answer: 'cod-no-answer',
 };
 
+// Shared-secret gate for /webhook/livekit/tool/* endpoints (issue #8). These
+// endpoints mutate Shopify state, so they fail closed: if LIVEKIT_TOOL_SECRET
+// is not configured, NO request is accepted. The agent worker sends the secret
+// via X-COD-Tool-Secret header (see src/livekit-agent.js).
+function requireLivekitToolAuth(req, res, next) {
+  if (!LIVEKIT_TOOL_SECRET) {
+    console.warn('[livekit-tool] LIVEKIT_TOOL_SECRET not configured — rejecting');
+    return res.status(503).json({ ok: false, error: 'tool auth not configured' });
+  }
+  const got = req.get('X-COD-Tool-Secret') || '';
+  if (!got) {
+    rejectCount.tool_auth_missing++;
+    return res.status(401).json({ ok: false, error: 'missing X-COD-Tool-Secret' });
+  }
+  const a = Buffer.from(got);
+  const b = Buffer.from(LIVEKIT_TOOL_SECRET);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    rejectCount.tool_auth_mismatch++;
+    return res.status(401).json({ ok: false, error: 'invalid X-COD-Tool-Secret' });
+  }
+  next();
+}
+
 async function livekitTagUpdate(req, res, toolName, noteFromBody) {
+  const body = req.body || {};
+  console.log('[livekit-tool]', toolName, 'body:', JSON.stringify(body).slice(0, 400));
+  const shop = body.shop;
+  const orderId = body.shopify_order_id;
+  if (!shop || !orderId) {
+    // Client input error — 400, not 200. The agent (issue #7) treats any
+    // non-2xx as failure.
+    return res.status(400).json({ ok: false, error: 'missing shop/shopify_order_id' });
+  }
+
+  const outcome = TOOL_TO_OUTCOME[toolName];
+  const tag = OUTCOME_TO_TAG[outcome];
+  const note = noteFromBody(body);
+
   try {
-    const body = req.body || {};
-    console.log('[livekit-tool]', toolName, 'body:', JSON.stringify(body).slice(0, 400));
-    const shop = body.shop;
-    const orderId = body.shopify_order_id;
-    if (!shop || !orderId) {
-      return res.status(200).json({ ok: false, error: 'missing shop/shopify_order_id' });
-    }
-
-    const outcome = TOOL_TO_OUTCOME[toolName];
-    const tag = OUTCOME_TO_TAG[outcome];
-    const note = noteFromBody(body);
-
     await updateOrderTag(shop, orderId, tag, note);
     await markScheduledCallOutcome(prisma, { shop, orderId, outcome, notes: note });
-
     res.json({ ok: true, tag_applied: tag, order_name: body.order_name });
   } catch (err) {
+    // Real backend failure (Shopify write failed, DB write failed, etc).
+    // Return 500 — do NOT pretend success. The agent checks both res.ok
+    // AND data.ok (issue #7) before telling the customer the tool worked.
     console.error('[livekit-tool]', toolName, 'error:', err);
-    res.status(200).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: err.message });
   }
 }
 
-app.post('/webhook/livekit/tool/confirm_order', (req, res) =>
+app.post('/webhook/livekit/tool/confirm_order', requireLivekitToolAuth, (req, res) =>
   livekitTagUpdate(req, res, 'confirm_order', b => `COD confirmed via Priya. ${b.note || ''}`.trim()));
-app.post('/webhook/livekit/tool/cancel_order', (req, res) =>
+app.post('/webhook/livekit/tool/cancel_order', requireLivekitToolAuth, (req, res) =>
   livekitTagUpdate(req, res, 'cancel_order', b => `COD cancelled via Priya. Reason: ${b.reason || 'not given'}`));
-app.post('/webhook/livekit/tool/request_human_agent', (req, res) =>
+app.post('/webhook/livekit/tool/request_human_agent', requireLivekitToolAuth, (req, res) =>
   livekitTagUpdate(req, res, 'request_human_agent', b => `Customer needs human agent. Note: ${b.note || ''}`));
-app.post('/webhook/livekit/tool/request_callback', (req, res) =>
+app.post('/webhook/livekit/tool/request_callback', requireLivekitToolAuth, (req, res) =>
   livekitTagUpdate(req, res, 'request_callback', b => `Customer asked callback: ${b.when || 'time not specified'}`));
 
 // LiveKit room-event webhook (optional — safety net for visibility)
@@ -344,6 +410,7 @@ app.listen(PORT, '127.0.0.1', async () => {
   console.log(`[glitch-cod-confirm] listening on 127.0.0.1:${PORT}`);
   console.log(`[glitch-cod-confirm] DISPATCH MODE: ${DISPATCH_MODE === 'live' ? '🟢 LIVE — real customer calls will be placed' : '🔒 DRY-RUN — no real calls (set DISPATCH_MODE=live to enable)'}`);
   console.log(`[glitch-cod-confirm] HMAC configured: ${Boolean(SHOPIFY_WEBHOOK_SECRET) ? 'YES' : 'NO (OPEN — development only!)'}`);
+  console.log(`[glitch-cod-confirm] LiveKit tool auth: ${Boolean(LIVEKIT_TOOL_SECRET) ? 'YES' : 'NO (tool webhooks will reject all requests)'}`);
   console.log(`[glitch-cod-confirm] shop allowlist: ${ALLOWLIST_ACTIVE ? ALLOWED_SHOPS.join(', ') : 'OPEN (all shops)'}`);
   console.log(`[glitch-cod-confirm] call delay: ${CALL_DELAY_MS}ms  |  DND now: ${isDnd(new Date())}`);
 
