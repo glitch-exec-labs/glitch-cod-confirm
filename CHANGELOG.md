@@ -13,7 +13,21 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-16
 
-- **04:30 UTC** — auto-sync: 2026-04-16 04:30 UTC (`36bb45d`) — 6 files
+- **05:15 UTC** — auto-sync: 2026-04-16 05:15 UTC (`42549d0`) — 2 files
+        M	src/lib/scheduler.js
+        M	src/server.js
+- **04:35 UTC** — Production-ready beta: DB queue, DND, phone normalization, retry, allowlist (`97a32ba`) — 4 files
+    Full P0+P1 production hardening push. Replaces the in-memory setTimeout
+    Map (which lost every pending call on restart) with a durable Postgres-
+    backed queue and 30s poll scheduler.
+    SERVER (src/server.js) — rewritten:
+      - Webhook handler now enqueues ScheduledCall rows idempotently via
+        @@unique([shop, orderId]) — Shopify retries can't create duplicates
+      - HMAC-missing rejected (was silently accepted before)
+      - ALLOWED_SHOPS gate — webhook from non-beta stores returns 200 silently
+        (doesn't leak which shops we serve) and increments reject counter
+      - Phone normalized on ingress via normalizePhone() — invalid phones
+- **04:30 UTC** — auto-sync: 2026-04-16 04:30 UTC (`08cb0a3`) — 7 files
         M	prisma/schema.prisma
         A	src/lib/dnd.js
         A	src/lib/fetch.js

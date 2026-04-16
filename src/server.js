@@ -25,7 +25,7 @@ import { normalizePhone } from './lib/phone.js';
 import { computeScheduledAt, adjustForDnd, isDnd } from './lib/dnd.js';
 import { isShopAllowed, ALLOWED_SHOPS, ALLOWLIST_ACTIVE } from './lib/shops.js';
 import { fetchWithTimeout } from './lib/fetch.js';
-import { startScheduler, markScheduledCallOutcome } from './lib/scheduler.js';
+import { startScheduler, markScheduledCallOutcome, DISPATCH_MODE } from './lib/scheduler.js';
 
 const { PrismaClient } = pkg;
 
@@ -56,6 +56,8 @@ app.get('/health', async (_req, res) => {
     ok: true,
     service: 'glitch-cod-confirm',
     port: PORT,
+    dispatch_mode: DISPATCH_MODE,
+    live: DISPATCH_MODE === 'live',
     livekit_agent_configured: Boolean(
       process.env.LIVEKIT_URL &&
       process.env.LIVEKIT_API_KEY &&
@@ -340,6 +342,7 @@ async function onFinalFail(row, reason) {
 
 app.listen(PORT, '127.0.0.1', async () => {
   console.log(`[glitch-cod-confirm] listening on 127.0.0.1:${PORT}`);
+  console.log(`[glitch-cod-confirm] DISPATCH MODE: ${DISPATCH_MODE === 'live' ? '🟢 LIVE — real customer calls will be placed' : '🔒 DRY-RUN — no real calls (set DISPATCH_MODE=live to enable)'}`);
   console.log(`[glitch-cod-confirm] HMAC configured: ${Boolean(SHOPIFY_WEBHOOK_SECRET) ? 'YES' : 'NO (OPEN — development only!)'}`);
   console.log(`[glitch-cod-confirm] shop allowlist: ${ALLOWLIST_ACTIVE ? ALLOWED_SHOPS.join(', ') : 'OPEN (all shops)'}`);
   console.log(`[glitch-cod-confirm] call delay: ${CALL_DELAY_MS}ms  |  DND now: ${isDnd(new Date())}`);

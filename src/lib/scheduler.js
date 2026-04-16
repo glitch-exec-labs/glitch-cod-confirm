@@ -36,6 +36,25 @@ const RETRY_BACKOFF_1_MS = Number(process.env.CALL_RETRY_1_MS          ?? 30 * 6
 const RETRY_BACKOFF_2_MS = Number(process.env.CALL_RETRY_2_MS          ?? 2 * 60 * 60_000); // 2h
 
 /**
+ * DISPATCH_MODE controls whether the scheduler actually places phone calls.
+ *   live    — full production. triggerLivekitCall fires, customer receives
+ *             a real PSTN call.
+ *   dry_run — beta-test mode. Scheduler picks up due rows, logs the full
+ *             payload, marks them done(dry_run), but DOES NOT call the
+ *             customer. Lets you exercise the entire HMAC/allowlist/phone/
+ *             DND/idempotency pipeline against real Shopify orders without
+ *             ringing anyone's phone.
+ *
+ * Default: live (so a missing env doesn't surprise-disable production).
+ * For first-store beta testing, set DISPATCH_MODE=dry_run in .env.
+ */
+export const DISPATCH_MODE = (process.env.DISPATCH_MODE || 'live').toLowerCase();
+const VALID_MODES = ['live', 'dry_run'];
+if (!VALID_MODES.includes(DISPATCH_MODE)) {
+  throw new Error(`Invalid DISPATCH_MODE: "${DISPATCH_MODE}". Must be one of: ${VALID_MODES.join(', ')}`);
+}
+
+/**
  * Start the scheduler. Returns a stop() fn. Only one scheduler loop should
  * run per process — server.js calls startScheduler() once in app init.
  */
@@ -58,7 +77,8 @@ export function startScheduler(prisma, { onFinalFail } = {}) {
   tick();
   const handle = setInterval(tick, TICK_MS);
 
-  console.log(`[scheduler] started — tick=${TICK_MS}ms, max-per-tick=${MAX_PER_TICK}, stuck-after=${STUCK_AFTER_MS}ms, max-attempts=${MAX_ATTEMPTS}`);
+  const modeLabel = DISPATCH_MODE === 'dry_run' ? '🔒 DRY-RUN (no real calls)' : '🟢 LIVE (real calls)';
+  console.log(`[scheduler] started — mode=${modeLabel} tick=${TICK_MS}ms, max-per-tick=${MAX_PER_TICK}, stuck-after=${STUCK_AFTER_MS}ms, max-attempts=${MAX_ATTEMPTS}`);
 
   return function stop() {
     stopped = true;
@@ -92,6 +112,30 @@ async function dispatchDue(prisma, onFinalFail) {
 
 async function dispatchOne(prisma, row, onFinalFail) {
   const payload = row.payload || {};
+
+  // ── DRY-RUN GATE ──────────────────────────────────────────────────
+  // Beta-test mode: log everything, persist the dry-run, do not call
+  // LiveKit. Customer never hears their phone ring.
+  if (DISPATCH_MODE === 'dry_run') {
+    console.log(`[scheduler] DRY-RUN dispatch ${row.orderName} (${row.shop}) phone=${row.phone} lang=${row.lang} payload=${JSON.stringify(payload)}`);
+    await prisma.callAttempt.create({
+      data: {
+        shop: row.shop, orderId: row.orderId, orderName: row.orderName,
+        phone: row.phone,
+        disposition: 'dry_run',
+        notes: 'DISPATCH_MODE=dry_run — no real call placed',
+        endedAt: new Date(),
+      },
+    });
+    await prisma.scheduledCall.update({
+      where: { id: row.id },
+      data:  { status: 'done', outcome: 'dry_run', attempts: { increment: 1 } },
+    });
+    console.log(`[scheduler] DRY-RUN done ${row.orderName} — flip DISPATCH_MODE=live to enable real calls`);
+    return;
+  }
+
+  // ── LIVE PATH ─────────────────────────────────────────────────────
   try {
     const result = await triggerLivekitCall({
       phone: row.phone,
