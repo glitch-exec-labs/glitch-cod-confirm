@@ -11,76 +11,41 @@ Body text (if present) shown as indented sub-bullets.
 
 ---
 
-## 2026-04-15
+## 2026-04-16
 
-- **17:18 UTC** — auto-sync: 2026-04-15 17:18 UTC (`3a2b760`) — 1 file
-        M	MILESTONES.md
-- **11:08 UTC** — auto-sync: 2026-04-15 11:08 UTC (`6e8693a`) — 4 files
-        M	src/livekit-agent.js
-        M	src/server.js
-        M	src/trigger-livekit-call.js
-- **10:57 UTC** — auto-sync: 2026-04-15 10:57 UTC (`0ab7ba9`) — 3 files
-        A	MILESTONES.md
-        M	src/livekit-agent.js
-- **10:45 UTC** — auto-sync: 2026-04-15 10:45 UTC (`5c1b64b`) — 2 files
-        M	src/livekit-agent.js
-- **10:30 UTC** — auto-sync: 2026-04-15 10:30 UTC (`ccd1f26`) — 2 files
-        M	src/livekit-agent.js
-- **10:15 UTC** — auto-sync: 2026-04-15 10:15 UTC (`915074d`) — 5 files
-        M	package.json
-        M	pnpm-lock.yaml
-        M	src/livekit-agent.js
-        M	src/server.js
-- **10:00 UTC** — auto-sync: 2026-04-15 10:00 UTC (`03223e2`) — 8 files
-        M	package.json
-        M	pnpm-lock.yaml
-        A	src/create-sip-trunk.mjs
-        A	src/livekit-agent.js
-        M	src/server.js
-        ... (+2 more)
-- **08:15 UTC** — auto-sync: 2026-04-15 08:15 UTC (`d57ae65`) — 2 files
-        M	src/server.js
-- **08:00 UTC** — auto-sync: 2026-04-15 08:00 UTC (`166efd6`) — 2 files
-        M	src/server.js
-- **07:45 UTC** — auto-sync: 2026-04-15 07:45 UTC (`f119f08`) — 3 files
-        M	src/server.js
-        M	src/setup-bolna-agent.mjs
-- **07:30 UTC** — auto-sync: 2026-04-15 07:30 UTC (`49553c9`) — 3 files
-        M	src/server.js
-        A	src/setup-bolna-agent.mjs
-- **07:15 UTC** — auto-sync: 2026-04-15 07:15 UTC (`c257e70`) — 3 files
-        M	src/setup-retell-agent.mjs
-        A	src/update-retell-agent.mjs
-- **07:00 UTC** — fix: surface Shopify GraphQL errors (ACCESS_DENIED no longer silent) (`44b336e`) — 2 files
-    updateOrderTag was only checking data.data.orderUpdate.userErrors but Shopify
-    returns top-level 'errors' array for ACCESS_DENIED and other request-level
-    failures. Changed to throw on either, so safeTagUpdate wrapper returns a
-    non-200-ish { ok: false, error } instead of falsely reporting success.
-    Root cause discovered: URBAN (your-shop) Shopify session is missing write_orders
-    scope. User needs to add scope to Dev Dashboard app + re-install.
-- **06:53 UTC** — fix: Retell tool URLs missing /cod-confirm/ nginx prefix + defensive handlers (`de7fd19`) — 3 files
-    Root cause of failed Shopify tag update:
-    1. setup-retell-agent.mjs generated tool URLs at your-domain.com/webhook/...
-       which nginx routed to port 3101 (Mokshya agency app) not port 3104 (cod-confirm).
-       All tool calls returned 404 → never reached us.
-    2. Tool handlers crashed when metadata was missing (curl tests with empty body)
-       causing service restart loops.
-    Fix:
-    - Patched live LLM via update-retell-llm API
-      to use /cod-confirm/webhook/retell/tool/<name> paths.
-    - Updated setup script so future re-runs don't regress.
-- **06:45 UTC** — auto-sync: 2026-04-15 06:45 UTC (`27d8693`) — 2 files
-        M	src/server.js
-- **06:15 UTC** — auto-sync: 2026-04-15 06:15 UTC (`061de66`) — 2 files
-        M	src/server.js
-- **06:09 UTC** — feat: initial scaffold of Glitch COD Confirm service (`a7d95f4`) — 7 files
-    Voice AI agent for Indian COD order confirmation on Shopify stores.
+- **04:30 UTC** — auto-sync: 2026-04-16 04:30 UTC (`36bb45d`) — 6 files
+        M	prisma/schema.prisma
+        A	src/lib/dnd.js
+        A	src/lib/fetch.js
+        A	src/lib/phone.js
+        A	src/lib/scheduler.js
+        ... (+1 more)
+- **03:03 UTC** — Add comprehensive README for public repo SEO (`8f5e629`) — 1 file
+    - Full architecture diagram and stack breakdown
+    - Setup instructions with .env template
+    - Design decisions (8kHz TTS, Devanagari prompts, platform comparison)
+    - Shopify integration guide with tag reference
+    - Adaptation guide for other stores
+    Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+- **03:01 UTC** — Fix 3 bugs: webhook auth bypass, COD detection crash, silent tag failure (`98f8bec`) — 1 file
+    P1: Webhook HMAC bypass — reject requests missing X-Shopify-Hmac-Sha256
+        when SHOPIFY_WEBHOOK_SECRET is configured. Previously a request with
+        no header at all was silently accepted, allowing unauthenticated
+        callers to trigger fake COD calls.
+    P1: COD detection TypeError — payment_gateway_names is an array in real
+        Shopify payloads, but .toLowerCase() was called on it directly.
+        Now joins array to string before matching.
+    P2: Tag writeback silent success — updateOrderTag() returned early without
+        throwing when no Shopify session existed. Callers reported ok:true to
+        the voice agent while the tag was never written. Now throws so callers
+- **02:56 UTC** — Voice AI agent for Indian COD order confirmation on Shopify stores (`c97d5e2`) — 15 files
     Stack:
-    - Retell AI agent with ElevenLabs 'Monika' en-IN voice
-    - GPT-4.1-mini as the brain, Hinglish system prompt (warm agent 'Priya')
-    - 5 function calls: confirm_order / cancel_order / request_human_agent / request_callback / end_call
-    - Express webhook server on :3104, exposed at your-domain.com/cod-confirm/*
-    - Shared Postgres Session table via Prisma (reuses Shopify tokens from multi-store-theme-manager)
-    - Systemd unit cod-confirm.service
-    Still pending:
-    - Exotel KYC + virtual number (production scale)
+    - LiveKit Agents JS + Sarvam Bulbul v3 TTS (voice=neha, sampleRate=8000)
+    - Sarvam Saaras v3 STT (hi-IN, Hinglish code-switch)
+    - GPT-4o-mini as the brain, bilingual system prompt (warm agent "Priya")
+    - Vobiz SIP trunk for outbound PSTN calls via LiveKit
+    - Express webhook server for Shopify orders/create integration
+    - Prisma + PostgreSQL for session/order state
+    Features:
+    - Bilingual (hi-IN default, en-IN via ?lang=en-IN)
+    - 5 function calls: confirm_order, cancel_order, request_human_agent, request_callback, end_call

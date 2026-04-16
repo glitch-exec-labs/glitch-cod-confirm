@@ -32,3 +32,58 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+// ─── Glitch COD Confirm: scheduled call queue ────────────────────────
+// Replaces the in-memory setTimeout Map with a durable queue. Polled every
+// 30s by the scheduler worker in src/lib/scheduler.js.
+//
+// Lifecycle:
+//   queued      — waiting for scheduledAt <= now()
+//   dispatching — SIP participant created; LiveKit should be running the call
+//   done        — terminal: outcome recorded (confirmed / cancelled / agent_needed / callback_requested)
+//   failed      — terminal: max attempts exceeded or permanent error
+//
+// Idempotency: @@unique([shop, orderId]) prevents dup rows on Shopify retries.
+model ScheduledCall {
+  id            String    @id @default(cuid())
+  shop          String
+  orderId       String    @db.VarChar(64)
+  orderName     String
+  phone         String    // normalized E.164
+  lang          String    @default("hi-IN")
+  payload       Json      // customer_name, total, product, city, area, etc.
+  scheduledAt   DateTime
+  status        String    @default("queued")
+  attempts      Int       @default(0)
+  lastAttemptAt DateTime?
+  lastError     String?
+  roomName      String?
+  sipCallId     String?
+  outcome       String?   // confirmed | cancelled | no_answer | busy | failed | agent_needed | callback_requested
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([shop, orderId])
+  @@index([status, scheduledAt])
+  @@index([roomName])
+}
+
+// One row per dispatch attempt. Audit trail for post-mortem + analytics.
+model CallAttempt {
+  id          String    @id @default(cuid())
+  shop        String
+  orderId     String    @db.VarChar(64)
+  orderName   String
+  phone       String
+  roomName    String?
+  sipCallId   String?
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  disposition String?   // confirmed | cancelled | no_answer | busy | failed | agent_needed | callback_requested | timeout
+  notes       String?   @db.Text
+  rawEvent    Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([shop, orderId])
+  @@index([roomName])
+}
