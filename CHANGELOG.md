@@ -13,7 +13,18 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-17
 
-- **02:45 UTC** — auto-sync: 2026-04-17 02:45 UTC (`507335f`) — 1 file
+- **19:29 UTC** — Add Cloudflare R2 backend for recording egress ($0 egress for training) (`2ed20fc`) — 2 files
+    Adds RECORDING_BACKEND=r2 alongside existing gcp and s3 options. R2 is
+    S3-compatible, so reuses LiveKit's S3Upload class with two extra fields
+    the generic s3 path didn't set: endpoint=https://<account>.r2.cloudflare
+    storage.com and forcePathStyle=true. Region is hardcoded to "auto" (R2
+    convention).
+    Why default to R2: training pulls the full dataset to a GPU box once per
+    experiment. At 100K calls/mo (~24 GB/mo accumulated), egress at GCS/S3
+    rates is ~$3/training-run; R2 is $0. Storage itself is ~$0.40/mo at that
+    scale (under free tier for the first couple of years).
+    Config: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.
+- **02:45 UTC** — auto-sync: 2026-04-17 02:45 UTC (`a049126`) — 2 files
         M	src/livekit-agent.js
 - **02:26 UTC** — chore: add gitleaks pre-commit hook (`38b7ec9`) — 1 file
     Blocks commits containing API keys, tokens, or other secrets.
