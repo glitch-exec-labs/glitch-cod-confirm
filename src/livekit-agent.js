@@ -84,8 +84,9 @@ ${ctxLines || `(No order context. This is a test / demo call — briefly greet t
 ***REMOVED***
 
 ***REMOVED***
+- पहले \`confirm_order\` tool call करो (speech से पहले, same turn में)
 ***REMOVED***
-उसी turn में तुरंत \`confirm_order\` tool call करो — tool call के बिना goodbye या farewell BILKUL मत बोलो।
+***REMOVED***
 
 ***REMOVED***
 
@@ -137,8 +138,9 @@ ${ctxLines || `(No order context provided. This is a test / demo call — briefl
 ***REMOVED***
 
 ***REMOVED***
+- First call \`confirm_order\` tool (before speaking, same turn)
 ***REMOVED***
-Immediately call \`confirm_order\` in the same turn — do NOT say any goodbye or farewell before the tool call completes.
+***REMOVED***
 
 ***REMOVED***
 
@@ -260,7 +262,7 @@ function buildTools(v) {
   return {
     confirm_order: llm.tool({
       description:
-        'Call as soon as the customer gives a clear positive confirmation for the COD order ("haan", "yes", "theek hai", "kar do", "bhej do", "confirm", "sahi hai", "ji"). Marks the Shopify order cod-confirmed.',
+        'Call IMMEDIATELY in the same response when the customer confirms both product+amount AND address ("haan", "yes", "theek hai", "sahi hai", "ji", "bilkul"). Do NOT wait for a subsequent user turn. This marks the Shopify order cod-confirmed.',
       parameters: z.object({
         note: z.string().optional().describe('Optional short note from the conversation.'),
       }),
