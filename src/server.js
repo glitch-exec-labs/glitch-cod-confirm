@@ -54,7 +54,14 @@ const livekitWebhookReceiver = (LIVEKIT_API_KEY && LIVEKIT_API_SECRET)
 app.use('/webhook/shopify', express.raw({ type: 'application/json' }));
 // Parse JSON for everything else, AND stash the raw Buffer so LiveKit
 // webhook signature verification works without needing a second parser.
+//
+// LiveKit Cloud sends webhook bodies with Content-Type
+// `application/webhook+json` (NOT plain application/json — per
+// https://docs.livekit.io/intro/.../webhooks-events/). The default
+// express.json() type matcher would silently skip these, leaving
+// req.body empty and req.rawBody unset, so we explicitly match both.
 app.use(express.json({
+  type: ['application/json', 'application/webhook+json'],
   verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
 

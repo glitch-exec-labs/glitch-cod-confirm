@@ -13,7 +13,9 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-17
 
-- **20:15 UTC** — auto-sync: 2026-04-17 20:15 UTC (`c98b399`) — 1 file
+- **20:45 UTC** — auto-sync: 2026-04-17 20:45 UTC (`3838b2f`) — 1 file
+        M	src/server.js
+- **20:15 UTC** — auto-sync: 2026-04-17 20:15 UTC (`05a92ad`) — 2 files
         M	src/server.js
 - **19:30 UTC** — Add Cloudflare R2 backend for recording egress ($0 egress for training) (`e9dcd79`) — 3 files
     Adds RECORDING_BACKEND=r2 alongside existing gcp and s3 options. R2 is
