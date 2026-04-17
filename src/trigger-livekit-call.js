@@ -20,12 +20,18 @@ const LK_SIP_TRUNK_ID     = process.env.LIVEKIT_SIP_TRUNK_ID;
 const LK_AGENT_NAME       = process.env.LIVEKIT_AGENT_NAME || 'cod-confirm-priya';
 
 // ── Egress (training-data audio capture) ─────────────────────────────────
-// RECORDING_BACKEND    = 'gcp' | 's3' | '' (off)
+// RECORDING_BACKEND    = 'gcp' | 's3' | 'r2' | '' (off)
 // RECORDING_BUCKET     = bucket name (no protocol, no path)
 // RECORDING_PREFIX     = optional key prefix, e.g. "cod-confirm/"
 // GCP creds: GOOGLE_APPLICATION_CREDENTIALS_JSON (raw JSON string) OR default
 //            service-account on the host.
 // S3 creds:  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION.
+// R2 creds:  R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID.
+//            R2 is S3-compatible — we reuse LiveKit's S3Upload and set
+//            endpoint=https://<account>.r2.cloudflarestorage.com,
+//            region=auto, forcePathStyle=true. Recommended default: zero
+//            egress fees at training time make R2 the cheapest backend
+//            for write-now-train-later workloads.
 // If RECORDING_BACKEND is unset, egress is skipped with a warning log —
 // calls still work, just no audio persisted.
 const RECORDING_BACKEND = (process.env.RECORDING_BACKEND || '').toLowerCase();
@@ -54,6 +60,24 @@ function buildEgressUpload() {
       accessKey: process.env.AWS_ACCESS_KEY_ID || '',
       secret:    process.env.AWS_SECRET_ACCESS_KEY || '',
       region:    process.env.AWS_REGION || '',
+    });
+  }
+  if (RECORDING_BACKEND === 'r2') {
+    if (!RECORDING_BUCKET) return null;
+    const accountId = process.env.R2_ACCOUNT_ID || '';
+    if (!accountId) {
+      console.warn('[egress] R2_ACCOUNT_ID not set — cannot build R2 endpoint');
+      return null;
+    }
+    return new S3Upload({
+      bucket:          RECORDING_BUCKET,
+      accessKey:       process.env.R2_ACCESS_KEY_ID || '',
+      secret:          process.env.R2_SECRET_ACCESS_KEY || '',
+      // R2 ignores region semantics; "auto" is the convention.
+      region:          'auto',
+      // Virtual-hosted style doesn't work against R2; path-style does.
+      endpoint:        `https://${accountId}.r2.cloudflarestorage.com`,
+      forcePathStyle:  true,
     });
   }
   return null;
