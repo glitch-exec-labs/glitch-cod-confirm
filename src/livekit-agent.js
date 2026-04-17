@@ -466,5 +466,9 @@ cli.runApp(
   new ServerOptions({
     agent: fileURLToPath(import.meta.url),
     agentName: process.env.LIVEKIT_AGENT_NAME || 'cod-confirm-priya',
+    // Bind worker health/metrics server to loopback only — nginx is not in
+    // front of :8081 and LiveKit cloud doesn't need to reach it. Defense in
+    // depth against a misconfigured firewall.
+    host: process.env.LIVEKIT_AGENT_HTTP_HOST || '127.0.0.1',
   }),
 );

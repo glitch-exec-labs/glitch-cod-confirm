@@ -11,9 +11,29 @@ Body text (if present) shown as indented sub-bullets.
 
 ---
 
+## 2026-04-17
+
+- **02:45 UTC** — auto-sync: 2026-04-17 02:45 UTC (`507335f`) — 1 file
+        M	src/livekit-agent.js
+- **02:26 UTC** — chore: add gitleaks pre-commit hook (`38b7ec9`) — 1 file
+    Blocks commits containing API keys, tokens, or other secrets.
+    Install locally: pre-commit install
+    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
 ## 2026-04-16
 
-- **21:45 UTC** — auto-sync: 2026-04-16 21:45 UTC (`6526f59`) — 5 files
+- **22:28 UTC** — Add data-moat foundation: per-turn transcripts, audio egress, consent (`456f4ac`) — 2 files
+    Building the proprietary dataset for later training. Schema + endpoint +
+    agent changes were captured by auto-sync as 6ba5363; this commit adds the
+    manual-migration artifact that applies the new columns against an already-
+    running Postgres.
+    Feature set (across this commit and 6ba5363):
+    Schema (prisma/schema.prisma)
+    - CallAttempt gains audioUri, audioFormat, audioDurationMs,
+      audioSampleRate, lang, consentGiven, turnCount — pointers + metadata
+      so the training exporter can join (audio, transcript, outcome).
+    - New CallTurn model: one row per utterance. Fields: turnIndex (monotonic),
+- **21:45 UTC** — auto-sync: 2026-04-16 21:45 UTC (`6ba5363`) — 6 files
         M	.env.example
         M	prisma/schema.prisma
         M	src/livekit-agent.js
