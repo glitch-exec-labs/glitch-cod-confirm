@@ -85,7 +85,7 @@ ${ctxLines || `(No order context. This is a test / demo call — briefly greet t
 
 ***REMOVED***
 ***REMOVED***
-***REMOVED***
+उसी turn में तुरंत \`confirm_order\` tool call करो — tool call के बिना goodbye या farewell BILKUL मत बोलो।
 
 ***REMOVED***
 
@@ -101,6 +101,7 @@ ${ctxLines || `(No order context. This is a test / demo call — briefly greet t
 - "ये call असली है?" → "बिलकुल, ${v.store_name} की तरफ़ से। ${v.order_number ? 'आपके order number ' + v.order_number + ' के बारे में call की है।' : ''}"
 
 **Rules:**
+***REMOVED***
 ***REMOVED***
 ***REMOVED***
 ***REMOVED***
@@ -137,7 +138,7 @@ ${ctxLines || `(No order context provided. This is a test / demo call — briefl
 
 ***REMOVED***
 ***REMOVED***
-***REMOVED***
+Immediately call \`confirm_order\` in the same turn — do NOT say any goodbye or farewell before the tool call completes.
 
 ***REMOVED***
 
@@ -153,6 +154,7 @@ ${ctxLines || `(No order context provided. This is a test / demo call — briefl
 - "Is this call real?" → "Yes, this is from ${v.store_name}.${v.order_number ? ' I am calling about your order ' + v.order_number + '.' : ''}"
 
 **Rules:**
+***REMOVED***
 ***REMOVED***
 ***REMOVED***
 ***REMOVED***
