@@ -404,6 +404,7 @@ export default defineAgent({
       llm: new openai.LLM({
         model: 'gpt-4o-mini',
         temperature: 0.6,
+        maxTokens: 120,   // Priya speaks 1-2 short sentences — cap prevents slow generation
       }),
       tts: new sarvam.TTS({
         model: 'bulbul:v3',
@@ -423,6 +424,14 @@ export default defineAgent({
       }),
       turnDetection: new livekit.turnDetector.MultilingualModel(),
       preemptiveGeneration: true,    // default; false caused >10s startup delay, users hung up before greeting
+      // AEC warmup default is 3000ms — interruptions are DISABLED during warmup.
+      // 500ms is enough for echo canceller to stabilise on a SIP call while
+      // keeping barge-in responsive from the first second of each agent turn.
+      aecWarmupDuration: 500,
+      // Require at least 2 words before treating customer speech as a real
+      // interruption — prevents single-syllable noise ("hmm", breath) from
+      // cutting Priya off mid-sentence.
+      minInterruptionWords: 2,
     });
 
     // Each event handler persists to Postgres AND still logs to journalctl
