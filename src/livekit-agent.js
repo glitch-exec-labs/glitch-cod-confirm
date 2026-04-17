@@ -83,9 +83,10 @@ ${ctxLines || `(No order context. This is a test / demo call — briefly greet t
 "और delivery address है ${v.delivery_area || 'आपका address'}${v.delivery_city ? ', ' + v.delivery_city : ''} — यहाँ ही deliver करना है ना?"
 अगर customer address wrong बताए, capture करो और \`request_human_agent\` call करो note "address correction needed: <details>"।
 
-**Step 3 — Final confirm.** दोनों confirm हो जाने पर:
-"ठीक है, मैं आपका order confirm कर रही हूँ। आपको पाँच से सात दिन में deliver हो जाएगा।"
-उसी turn में तुरंत \`confirm_order\` tool call करो — tool call के बिना goodbye या farewell BILKUL मत बोलो।
+**Step 3 — Final confirm.** जब customer दोनों (product+amount AND address) पर "हाँ" / "सही है" / "ठीक है" बोले — उस response में:
+- पहले \`confirm_order\` tool call करो (speech से पहले, same turn में)
+- फिर बोलो: "ठीक है, मैं आपका order confirm कर रही हूँ। आपको पाँच से सात दिन में deliver हो जाएगा। धन्यवाद, आपका दिन शुभ हो!"
+Tool call उसी LLM turn में होनी चाहिए जिसमें customer का final confirmation आया — अगले turn का इंतज़ार मत करो।
 
 **Refusal / objections kisi भी step पर:**
 
@@ -136,9 +137,10 @@ ${ctxLines || `(No order context provided. This is a test / demo call — briefl
 "And your delivery address is ${v.delivery_area || 'your address'}${v.delivery_city ? ', ' + v.delivery_city : ''} — is that correct?"
 If the customer says the address is wrong, capture what's wrong and call \`request_human_agent\` with note "address correction needed: <details>".
 
-**Step 3 — Final confirm.** After both product+amount AND address are confirmed:
-"Great, I'm confirming your order now. It will be delivered in five to seven days."
-Immediately call \`confirm_order\` in the same turn — do NOT say any goodbye or farewell before the tool call completes.
+**Step 3 — Final confirm.** When the customer confirms both product+amount AND address — in that SAME response:
+- First call \`confirm_order\` tool (before speaking, same turn)
+- Then say: "Great, I've confirmed your order. It will be delivered in five to seven days. Thank you, have a great day!"
+The tool call must happen in the same LLM turn as the customer's final confirmation — do NOT wait for another user turn.
 
 **Refusal / objections at any step:**
 
@@ -260,7 +262,7 @@ function buildTools(v) {
   return {
     confirm_order: llm.tool({
       description:
-        'Call as soon as the customer gives a clear positive confirmation for the COD order ("haan", "yes", "theek hai", "kar do", "bhej do", "confirm", "sahi hai", "ji"). Marks the Shopify order cod-confirmed.',
+        'Call IMMEDIATELY in the same response when the customer confirms both product+amount AND address ("haan", "yes", "theek hai", "sahi hai", "ji", "bilkul"). Do NOT wait for a subsequent user turn. This marks the Shopify order cod-confirmed.',
       parameters: z.object({
         note: z.string().optional().describe('Optional short note from the conversation.'),
       }),
