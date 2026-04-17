@@ -147,11 +147,15 @@ export async function triggerLivekitCall({ phone, order, lang, roomName }) {
     metadata: JSON.stringify({ shop: order.shop, order_id: order.id, order_name: order.name }),
   });
 
-  // Start audio egress in parallel — best-effort, does not block dispatch.
-  // Transcripts are captured per-turn from the agent regardless of whether
-  // egress succeeds; this handler is specifically for the audio side of the
-  // training-data moat (paired with CallTurn rows via room_name).
-  const egressPromise = startAudioEgress(room);
+  // Start audio egress 10 s after dispatch — gives the agent time to join the
+  // room and publish its audio track, which resolves the "no supported codec"
+  // error that occurs when egress is started on an empty room.
+  // Best-effort: transcripts are captured per-turn regardless of egress.
+  setTimeout(() => {
+    startAudioEgress(room).then(info => {
+      if (info) console.log(`[egress] delayed start confirmed for room ${room}: egress_id=${info.egressId}`);
+    });
+  }, 10_000);
 
   // Now originate the outbound SIP call. participantAttributes flow through
   // to agent's ctx.waitForParticipant().attributes.
@@ -187,12 +191,5 @@ export async function triggerLivekitCall({ phone, order, lang, roomName }) {
     },
   );
 
-  // Resolve the egress promise so its result (or failure) is surfaced in
-  // the returned object. Never block long on it — if it's slow, abandon.
-  const egress = await Promise.race([
-    egressPromise,
-    new Promise(r => setTimeout(() => r(null), 3000)),
-  ]);
-
-  return { ok: true, room_name: room, sip, egress_id: egress?.egressId || null };
+  return { ok: true, room_name: room, sip, egress_id: null };
 }
