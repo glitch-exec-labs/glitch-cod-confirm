@@ -20,6 +20,7 @@
 import express from 'express';
 import crypto from 'node:crypto';
 import pkg from '@prisma/client';
+import { WebhookReceiver } from 'livekit-server-sdk';
 import { triggerLivekitCall } from './trigger-livekit-call.js';
 import { normalizePhone } from './lib/phone.js';
 import { computeScheduledAt, adjustForDnd, isDnd } from './lib/dnd.js';
@@ -40,9 +41,22 @@ const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
 const LIVEKIT_TOOL_SECRET = process.env.LIVEKIT_TOOL_SECRET || '';
 const CALL_DELAY_MS = Number(process.env.CALL_DELAY_MS ?? 10 * 60_000); // 10 min default
 
+// LiveKit Cloud signs webhook bodies with the project API secret and sends
+// the signed JWT in the Authorization header. We verify with WebhookReceiver
+// using the SAME API key/secret the agent worker uses to connect.
+const LIVEKIT_API_KEY    = process.env.LIVEKIT_API_KEY    || '';
+const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || '';
+const livekitWebhookReceiver = (LIVEKIT_API_KEY && LIVEKIT_API_SECRET)
+  ? new WebhookReceiver(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+  : null;
+
 // Raw body needed for Shopify HMAC verification
 app.use('/webhook/shopify', express.raw({ type: 'application/json' }));
-app.use(express.json());
+// Parse JSON for everything else, AND stash the raw Buffer so LiveKit
+// webhook signature verification works without needing a second parser.
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 
 // Counters for /health
 let rejectCount = { hmac_missing: 0, hmac_mismatch: 0, shop_blocked: 0, tool_auth_missing: 0, tool_auth_mismatch: 0 };
@@ -365,28 +379,106 @@ app.post('/webhook/livekit/turn', requireLivekitToolAuth, async (req, res) => {
   }
 });
 
-// LiveKit Egress callback — fired by LiveKit Cloud when a room-composite
-// audio recording finishes uploading to our configured cloud-storage bucket.
-// We keep the pointer on CallAttempt so the training-export job can later
-// join (audio, transcript, outcome).
-app.post('/webhook/livekit/egress-ready', requireLivekitToolAuth, async (req, res) => {
-  const b = req.body || {};
-  const roomName = b.room_name || b.roomName;
-  if (!roomName) return res.status(400).json({ ok: false, error: 'missing room_name' });
+// LiveKit Cloud webhook endpoint. This is the URL you configure in
+// LiveKit Project Settings → Webhooks. LiveKit sends ALL project events
+// to a single URL (room_started, room_finished, egress_started,
+// egress_updated, egress_ended, participant_joined, ...) — we dispatch
+// here based on the `event` field.
+//
+// Auth: LiveKit signs the raw body with the project API secret and
+// includes the JWT in the Authorization header. We verify via
+// WebhookReceiver using the SAME LIVEKIT_API_KEY / LIVEKIT_API_SECRET
+// the agent worker uses. Custom headers (X-COD-Tool-Secret etc.) are
+// NOT supported by LiveKit — that header config from earlier was a
+// dead letter.
+//
+// For manual testing / replay, the fallback path still honours an
+// X-COD-Tool-Secret header so you can POST synthetic payloads with
+// curl. That path bypasses signature verification by design.
+app.post('/webhook/livekit/egress-ready', async (req, res) => {
   try {
+    let event = null;
+
+    // Path A: real LiveKit webhook — has an Authorization JWT.
+    const authHeader = req.get('Authorization') || '';
+    if (authHeader && livekitWebhookReceiver) {
+      if (!req.rawBody) {
+        return res.status(400).json({ ok: false, error: 'raw body required for LiveKit signature verification' });
+      }
+      try {
+        event = await livekitWebhookReceiver.receive(req.rawBody.toString('utf8'), authHeader);
+      } catch (err) {
+        console.warn('[livekit-webhook] signature verification failed:', err.message);
+        return res.status(401).json({ ok: false, error: 'invalid LiveKit webhook signature' });
+      }
+    }
+    // Path B: manual replay / curl — our internal shared secret.
+    else if (req.get('X-COD-Tool-Secret')) {
+      const got = req.get('X-COD-Tool-Secret');
+      if (!LIVEKIT_TOOL_SECRET) {
+        return res.status(503).json({ ok: false, error: 'tool auth not configured' });
+      }
+      const a = Buffer.from(got);
+      const b = Buffer.from(LIVEKIT_TOOL_SECRET);
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        return res.status(401).json({ ok: false, error: 'invalid X-COD-Tool-Secret' });
+      }
+      event = req.body; // trust the payload shape from a manual replay
+    }
+    // Path C: no auth → reject
+    else {
+      return res.status(401).json({ ok: false, error: 'missing Authorization or X-COD-Tool-Secret' });
+    }
+
+    // LiveKit test-event button sends a payload with event="" or a
+    // minimal ping payload. Accept it but don't try to extract fields.
+    const eventType = event?.event || '(unknown)';
+    console.log(`[livekit-webhook] event=${eventType} id=${event?.id || '-'}`);
+
+    // Only egress_ended carries the final audio URI. room_started,
+    // participant_joined, etc. — just ack.
+    if (eventType !== 'egress_ended') {
+      return res.json({ ok: true, event: eventType, ignored: true });
+    }
+
+    const eg = event.egressInfo || event.egress_info || {};
+    const roomName = eg.roomName || eg.room_name;
+    const file = (eg.fileResults && eg.fileResults[0]) || (eg.file_results && eg.file_results[0]) || null;
+    if (!roomName) {
+      return res.status(400).json({ ok: false, error: 'egressInfo.roomName missing' });
+    }
+
+    // Duration comes as nanoseconds (int64) from LiveKit. Convert to ms.
+    let durationMs = null;
+    if (file?.duration) {
+      const ns = typeof file.duration === 'bigint' ? Number(file.duration) : Number(file.duration);
+      if (Number.isFinite(ns)) durationMs = Math.round(ns / 1_000_000);
+    }
+
+    // File format inferred from filename extension (OGG by our egress config).
+    let audioFormat = null;
+    const filename = file?.filename || '';
+    const m = /\.([a-zA-Z0-9]+)$/.exec(filename);
+    if (m) audioFormat = m[1].toLowerCase();
+
+    const audioUri = file?.location || filename || null;
+
     const updated = await prisma.callAttempt.updateMany({
       where: { roomName },
       data: {
-        audioUri:        b.audio_uri || b.audioUri || null,
-        audioFormat:     b.format || null,
-        audioDurationMs: typeof b.duration_ms === 'number' ? b.duration_ms : null,
-        audioSampleRate: typeof b.sample_rate === 'number' ? b.sample_rate : null,
+        audioUri,
+        audioFormat,
+        audioDurationMs: durationMs,
+        // consentGiven is set true because our welcome always plays the
+        // disclosure (unless RECORDING_CONSENT_DISCLOSURE=off, in which
+        // case deployment takes responsibility for consent out-of-band).
+        consentGiven:    (process.env.RECORDING_CONSENT_DISCLOSURE || 'on').toLowerCase() !== 'off',
       },
     });
-    console.log(`[livekit-egress] room=${roomName} audio=${b.audio_uri || b.audioUri} rows=${updated.count}`);
-    res.json({ ok: true, rows_updated: updated.count });
+    console.log(`[livekit-egress] room=${roomName} uri=${audioUri} dur=${durationMs}ms rows=${updated.count}`);
+    res.json({ ok: true, event: eventType, rows_updated: updated.count });
   } catch (err) {
-    console.error('[livekit-egress] error:', err);
+    console.error('[livekit-webhook] error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
