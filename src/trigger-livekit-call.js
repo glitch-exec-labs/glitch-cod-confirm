@@ -11,7 +11,7 @@
  * via ctx.waitForParticipant().attributes inside src/livekit-agent.js.
  */
 
-import { SipClient, AgentDispatchClient, EgressClient, EncodedFileType, EncodedFileOutput, S3Upload, GCPUpload } from 'livekit-server-sdk';
+import { SipClient, AgentDispatchClient, EgressClient, EncodedFileType, EncodedFileOutput, EncodingOptions, AudioCodec, S3Upload, GCPUpload } from 'livekit-server-sdk';
 
 const LK_URL              = process.env.LIVEKIT_URL;
 const LK_KEY              = process.env.LIVEKIT_API_KEY;
@@ -98,18 +98,19 @@ async function startAudioEgress(room) {
   }
   try {
     const egressClient = new EgressClient(LK_URL, LK_KEY, LK_SECRET);
-    // OGG = small + lossy but fine for ASR training at phone-grade audio.
-    // Swap to WAV (EncodedFileType.MP4 with audio-only track, or raw) if you
-    // later need lossless for fine-tuning Sarvam.
-    const filepath = `${RECORDING_PREFIX}${room}.ogg`;
+    // MP4 + Opus is the only reliable audioOnly combo for room composite egress.
+    // OGG caused "no supported codec compatible with all outputs" — the compositor
+    // pipeline needs explicit codec selection. MP4/Opus at 32kbps is fine for ASR.
+    const filepath = `${RECORDING_PREFIX}${room}.mp4`;
     const output = new EncodedFileOutput({
-      fileType: EncodedFileType.OGG,
+      fileType: EncodedFileType.MP4,
       filepath,
       output: { case: RECORDING_BACKEND === 'gcp' ? 'gcp' : 's3', value: upload },
     });
     const info = await egressClient.startRoomCompositeEgress(room, {
       file: output,
       audioOnly: true,
+      advanced: new EncodingOptions({ audioCodec: AudioCodec.OPUS }),
     });
     console.log(`[egress] started room=${room} egress_id=${info.egressId} → ${RECORDING_BACKEND}://${RECORDING_BUCKET}/${filepath}`);
     return info;
