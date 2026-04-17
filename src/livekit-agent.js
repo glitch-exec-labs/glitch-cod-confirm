@@ -434,7 +434,7 @@ export default defineAgent({
     });
     session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
       if (ev.item?.role !== 'assistant') return;
-      const text = typeof ev.item.content === 'string' ? ev.item.content : '';
+      const text = ev.item.textContent ?? '';
       console.log(`[priya] ${text.slice(0, 200)}`);
       postTurn({ role: 'assistant', text });
     });
