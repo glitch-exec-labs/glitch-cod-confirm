@@ -312,7 +312,15 @@ function buildTools(v) {
 export default defineAgent({
   prewarm: async (proc) => {
     // Load Silero VAD once per worker process — shared across all calls.
-    proc.userData.vad = await silero.VAD.load();
+    // SIP audio is 8kHz; matching VAD sample rate to input skips the resample
+    // step AND halves samples-per-window → cuts "inference slower than realtime"
+    // warnings at call start on our 2-CPU VPS.
+    // minSilenceDuration reduced from default 550ms to 400ms for snappier
+    // end-of-turn detection on SIP latency.
+    proc.userData.vad = await silero.VAD.load({
+      sampleRate: 8000,
+      minSilenceDuration: 400,
+    });
   },
 
   entry: async (ctx) => {
