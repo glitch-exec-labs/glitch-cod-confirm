@@ -13,7 +13,20 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-19
 
-- **13:15 UTC** — auto-sync: 2026-04-19 13:15 UTC (`befd3cb`) — 1 file
+- **18:15 UTC** — auto-sync: 2026-04-19 18:15 UTC (`5910316`) — 1 file
+        M	src/livekit-agent.js
+- **17:08 UTC** — docs: detailed session handover with exact test commands (`5a92945`) — 1 file
+    The previous handover was too high-level — next session didn't know
+    how to fire a test call. This version has:
+    - Copy-paste-ready test command at the TOP of the doc
+    - Known failure modes + symptom → root cause → fix table
+    - All API keys rotated today flagged as potentially in chat transcript
+    - Honest status: Urban Classics live but Vobiz/Sarvam WS reliability
+      issues remain. Not "production-ready" yet.
+    - User's Pipecat evaluation ask captured as next-session priority
+    - Current TTS config revert to WS streaming (REST gave 20s turn times)
+    Also includes the uncommitted TTS revert (REST StreamAdapter → WS
+- **13:15 UTC** — auto-sync: 2026-04-19 13:15 UTC (`2d96aa5`) — 2 files
         M	src/livekit-agent.js
 - **12:45 UTC** — auto-sync: 2026-04-19 12:45 UTC (`de7aed7`) — 2 files
         M	src/livekit-agent.js

@@ -229,7 +229,21 @@ function articleFor(s) {
  * they're injected server-side from LiveKit participant attributes.
  */
 function buildTools(v) {
+  // Sandbox/test rooms arrive without shop + shopify_order_id attributes, so
+  // backend tool endpoints 400 on every call. The LLM would then retry the
+  // same tool within one user turn; each retry keeps the TTS WS open with no
+  // text to synthesize, and after ~60s Sarvam closes the WS with code 408
+  // ("Websocket was left open without any messages for too long"). The plugin
+  // flags that as unrecoverable and the whole AgentSession dies. Short-circuit
+  // here with a terminal message so the LLM stops retrying and can voice a
+  // graceful fallback instead.
+  const hasOrderContext = Boolean(v.shop && v.shopify_order_id);
+
   async function postTool(name, payload) {
+    if (!hasOrderContext) {
+      console.warn(`[tool ${name}] SKIPPED: no shop/shopify_order_id on this call (likely sandbox)`);
+      return `Tool ${name} is unavailable for this call because order context is missing. Do NOT call this tool again. Apologise briefly to the customer and end the call.`;
+    }
     const url = `${WEBHOOK_BASE}/webhook/livekit/tool/${name}`;
     try {
       const res = await fetch(url, {
