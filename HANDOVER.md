@@ -1,160 +1,187 @@
-# Session Handover — 2026-04-18
+# Session Handover — 2026-04-19
 
-Snapshot of everything shipped this session, current production state, and what's left to do. Start here when resuming.
+Latest snapshot. Start here when resuming. Previous session logs are at the bottom for reference.
 
 ---
 
-## Production state
+## 🟢 Production state (2026-04-19 ~05:55 IST)
 
 | Component | Status |
 |---|---|
 | `cod-confirm.service` (Express, :3104) | 🟢 active · `DISPATCH_MODE=live` |
-| `cod-confirm-agent.service` (LiveKit worker) | 🟢 active |
-| Shopify webhook (`orders/create`) | 🟢 wired, HMAC-verified |
-| LiveKit webhooks (`/webhook/livekit/egress-ready`) | 🟢 wired, JWT-verified via `WebhookReceiver` |
-| Vobiz SIP trunk | 🟢 outbound IN working · ❌ international (CA tested, blocked) |
-| Cloudflare R2 (`glitch-cod-recordings`) | 🟢 MP4/Opus landing under `cod-confirm/` prefix |
-| PostgreSQL (CallTurn + CallAttempt) | 🟢 per-turn transcript persistence working |
-| Shopify tag writes | 🟢 verified on order #8973 (`cod-confirmed`) |
+| `cod-confirm-agent.service` (LiveKit worker) | 🟢 active, VAD prewarmed at 8 kHz |
+| Shopify webhook (`orders/create`) | 🟢 HMAC via per-shop map (1 shop: Urban) |
+| LiveKit webhooks (`/webhook/livekit/egress-ready`) | 🟢 JWT-verified via `WebhookReceiver` |
+| Vobiz SIP trunk | 🟢 India outbound · ❌ international (CA blocked) |
+| Cloudflare R2 (`glitch-cod-recordings`) | 🟢 MP4/Opus landing |
+| PostgreSQL (CallTurn + CallAttempt + Session) | 🟢 per-turn transcripts working |
+| Shopify tag writes | 🟢 verified (`cod-confirmed` on #8973) |
+| Allowed shops | `f51039.myshopify.com` (Urban Classics only) |
+| DND window | **20:00 → 10:05 IST** (10-hour call window) |
+| Freshness cutoff | `QUEUE_ONLY_AFTER=2026-04-19T00:25:25Z` · `MAX_ORDER_AGE_HOURS=6` |
 | License | 🟢 BSL 1.1, change date 2030-04-18, Apache 2.0 successor |
 
-**Last successful end-to-end call:** `cod-8973-1776469400808`
-- 13 turns captured to `CallTurn`
-- `confirm_order` tool fired same-turn as customer's "हाँ"
-- Shopify `cod-confirmed` tag written
-- Audio egress `EG_U6UomGvKjeqq` → `r2://glitch-cod-recordings/cod-confirm/cod-8973-1776469400808.mp4`
+**First real production call expected:** 10:05 AM IST, 2026-04-19. No backfill — stale orders from Shopify's retry queue get 200-ack'd but skipped.
 
 ---
 
-## Everything shipped this session
+## 🏪 The 4 Urban-family stores (live data)
 
-### GitHub issues closed (#7–#12)
-All six P1/P2 issues fixed + closed with notes on test gaps:
-- #7 — Agent trusted 2xx; now validates `data.ok === true`
-- #8 — Tool endpoints now require `X-COD-Tool-Secret` header (`timingSafeEqual`)
-- #9 — COD detection normalized (strips non-alphanum, handles all Shopify gateway variants)
-- #10 — `livekitTagUpdate` returns proper 4xx/5xx instead of 200+`{ok:false}`
-- #11 — `updateOrderTag` throws on HTTP non-2xx, non-JSON, GraphQL errors
-- #12 — Scheduler split into two phases; atomic `updateMany` with `outcome=null` for first-write-wins
+| Store | Shopify handle | App (Dev Dashboard) | Auth slug | Orders/30d | COD% | AOV | Call cost/mo @ ₹10.98 |
+|---|---|---|---|---|---|---|---|
+| **Urban Classics** | `f51039.myshopify.com` | `Glitch Grow X Urban` (`glitch-grow-x-urban-9`) | `urban` | **377** | 85% | ₹2,068 | ₹3,514 |
+| **Trendsetters** | `acmsuy-g0.myshopify.com` | `Glitch Grow X Trendsetter` (`glitch-grow-x-trendsetter-5`) | `trendsetters` | 212 | 79% | ₹2,132 | ₹1,834 |
+| **Storico** | `ys4n0u-ys.myshopify.com` | `Glitch Grow X Storico` (`glitch-grow-x-storico-6`) | `storico` | 171 | 87% | ₹2,244 | ₹1,636 |
+| **Classico** | `52j1ga-hz.myshopify.com` | `Glitch Grow X Classicoo` (`glitch-grow-x-classicoo-5`) | `classicoo` | 27 | 100% | ₹1,946 | ₹296 |
+| **FLEET** | | | | **787** | ~85% | — | **₹7,280/mo** |
 
-### Data moat foundation (the actual business asset)
-- **`CallTurn` model** — one row per utterance (user / assistant / tool), `@@unique([roomName, turnIndex])` for idempotent upserts
-- **`CallAttempt` extended** — `audioUri`, `audioFormat`, `audioDurationMs`, `audioSampleRate`, `lang`, `consentGiven`, `turnCount`
-- **Per-turn webhook** — `POST /webhook/livekit/turn` from agent (fire-and-forget, shared-secret auth)
-- **LiveKit egress webhook** — `POST /webhook/livekit/egress-ready` with dual auth (JWT via `WebhookReceiver` OR `X-COD-Tool-Secret` fallback)
-- **R2 audio egress** — started 10s after dispatch (gives agent time to publish tracks), MP4/Opus format via `EncodingOptions({ audioCodec: AudioCodec.OPUS })`
-- **DPDP consent disclosure** — added to welcome message, toggle via `RECORDING_CONSENT_DISCLOSURE`
+**Fleet economics:** GMV ₹16.7L/mo · Call cost 0.44% of GMV · Net positive ~₹34,486/mo at 60% RTO-catch rate.
 
-### Voice quality + correctness fixes
-- **Assistant transcript extraction** — was using `item.content` (array of parts), now uses `item.textContent` (SDK getter)
-- **Egress codec** — OGG → MP4+Opus resolved "no supported codec compatible with all outputs"
-- **Tool-fires-same-turn** — prompt rewritten so `confirm_order` fires *before* the farewell phrase, in the same LLM turn as customer's "हाँ". Previously the tool was a deferred step and never fired if customer hung up first.
-- **AEC warmup tuning** — 3000ms → 500ms. SDK disables interruptions during AEC warmup; 3s was blocking barge-in for the entire first 3 seconds of every Priya turn.
-- **LLM token cap** — `maxTokens: 120` on gpt-4o-mini (Priya only speaks 1–2 short sentences; uncapped generation was adding latency)
-- **`minInterruptionWords: 2`** — prevents single-syllable noise from cutting Priya off
-
-### Security + repo hygiene
-- Git history scrubbed of client references via `git filter-repo` + force-push
-- Three R2 credential leaks rotated (final AKID starts `0cab`)
-- `gitleaks` pre-commit hook deployed (caught nothing since the rotation)
-- LiveKit Cloud webhook has `X-COD-Tool-Secret` removed (dead header)
-- LICENSE switched from MIT → BSL 1.1 (change date 2030-04-18, successor Apache 2.0)
-- README fully rewritten to reflect shipped pipeline
+**Canonical source of truth:** `/home/support/multi-store-theme-manager/SHOPIFY_STORES_INFRA.md`
 
 ---
 
-## Known issues / open items
+## 🔒 Multi-app architecture — key operational rule
 
-### Urgent
-- **TTS "inference slower than realtime"** at call start — ~200–800ms delays from Sarvam TTS during the first few seconds. Root cause unconfirmed; likely network latency to Sarvam API or stream chunk buffering. User reported "Priya hangs mid-conversation" — may or may not be related.
+**Every store has its own Shopify Dev Dashboard app** under the single `Glitch Executor` org (support@glitchexecutor.com Partner account). Each app → own Client ID + Client Secret → **signs webhook HMACs with a different secret per store**.
 
-### Important
-- **No regression tests** for any of the 6 closed GitHub issues (called out in every close comment). Next developer should add at least smoke-level tests before touching tool endpoints.
-- **Issue #2 still open** — per-shop prompt customization via Shopify metafields. Metafield resolution at dispatch time isn't built yet. Current `STORE_NAME`/`STORE_CATEGORY` env vars are single-tenant only.
-- **Vobiz blocks international** — CA test number didn't ring. Irrelevant for production (India-only customers) but flag for any future expansion.
+Implication: we use a JSON map `SHOPIFY_WEBHOOK_SECRETS` in `.env`, keyed by `.myshopify.com` domain. Adding a new store = adding one entry to the map. Fallback `SHOPIFY_WEBHOOK_SECRET` (singular) exists but is unset in prod so misconfigs fail loudly.
 
-### Nice-to-have
-- Migrate legacy files out of `src/` — `setup-retell-agent.mjs`, `setup-bolna-agent.mjs`, `update-retell-agent.mjs` are dead code
-- Dashboard for CallTurn analytics (confirm rate, cancel reasons, turn counts per outcome)
-- Move LiveKit egress webhook events to a typed event router instead of the current `if/else` chain
+```bash
+# Current state (Urban only — real value in /home/support/glitch-cod-confirm/.env, NEVER commit)
+SHOPIFY_WEBHOOK_SECRETS='{"f51039.myshopify.com":"shpss_<urban-client-secret>"}'
+SHOPIFY_WEBHOOK_SECRET=
+```
 
 ---
 
-## Key files changed this session
+## 🛠 Everything shipped this session (2026-04-19)
+
+### Performance (barge-in / mid-conversation hang fix)
+- **Silero VAD at 8 kHz** — matches SIP audio natively, skips resample step, halves samples/window. Resolves "inference is slower than realtime" warnings at call start on 2-CPU VPS.
+- **`minSilenceDuration` 550 → 400 ms** — snappier turn-end detection for SIP latency.
+- All prior barge-in fixes from 2026-04-18 still active (`aecWarmupDuration: 500`, `minInterruptionWords: 2`, `maxTokens: 120`).
+
+### Cost accounting
+- Ran 4 end-to-end test calls, 4.9 min total, cost ~₹10.96 (~$0.13)
+- Per-call unit economics: **₹2.74 average** (LiveKit + Sarvam + OpenAI + Vobiz + R2)
+- Projection for 1,000 calls/day: ~₹3.3L/mo, or ~₹10.98/call at scale
+
+### Shopify multi-store HMAC fix (production blocker!)
+- **Discovered:** every real Shopify webhook had been HMAC-rejected for 48 hours (no real orders had ever reached the app). Test calls worked only because `/flow-test-livekit` bypasses the webhook path.
+- **Root cause:** single `SHOPIFY_WEBHOOK_SECRET` can't handle multi-app architecture (each store's app has its own Client Secret).
+- **Fix:** added `SHOPIFY_WEBHOOK_SECRETS` JSON map keyed by shop domain. Resolves secret per-request using `X-Shopify-Shop-Domain` header (`resolveShopifySecret()` helper). Matches the existing `glitch-grow-ads-agent` pattern.
+- **Deployed:** Urban Classics Client Secret installed; confirmed `shopify_hmac_per_shop_count: 1` in health endpoint.
+
+### Tighter DND window (user-requested humane hours)
+- Was: 21:00 → 09:05 IST (TRAI minimum)
+- Now: **20:00 → 10:05 IST** (10-hour call window)
+- Env vars `DND_START_HOUR=20` `DND_END_HOUR=10` (dnd.js was already env-driven, no code change)
+
+### Freshness filters (prevents Shopify retry-backlog flood)
+- `QUEUE_ONLY_AFTER` = ISO timestamp, hard cutoff for go-live moments — set to 2026-04-19T00:25:25Z
+- `MAX_ORDER_AGE_HOURS` = 6, rolling freshness backstop
+- Both return 200 (to stop Shopify retries) but skip queueing — logged as `stale: <reason>`
+- Prevents the 48h backlog of previously-rejected webhooks from flooding the queue now that HMAC is fixed
+
+### Docs + observability
+- `README.md` already overhauled yesterday — still current
+- Startup log now distinguishes `YES (per-shop=N)` / `YES (fallback)` / `NO` instead of binary yes/no
+- `.env.example` documents all new env vars with rationale
+- Memory file `project_glitch_cod_confirm.md` updated with full 8-store app mapping
+- `multi-store-theme-manager/SHOPIFY_STORES_INFRA.md` updated with Dev Dashboard app names alongside slugs
+
+---
+
+## ⏭ Next steps (resume here)
+
+### Immediate (when you wake up)
+1. **Watch the 10:05 AM IST window open**:
+   ```bash
+   sudo journalctl -u cod-confirm.service --since "today 10:00 IST" | grep -E "queued|dispatch|stale"
+   ```
+   Expect: a flurry of `stale: before_go_live_cutoff` messages as Shopify drains its retry queue, followed by the first `queued` when a genuinely-new order arrives.
+2. **Verify first real call lands** — customer's phone should ring ~10 min after webhook arrival, Shopify tag written, CallTurn rows persist, R2 audio file created.
+3. **Monitor Urban for 24-48h** before onboarding other stores.
+
+### After Urban is stable — expand to other 3 stores
+4. Get Client Secrets for Trendsetters / Storico / Classicoo apps from Partner Dashboard.
+5. Update `SHOPIFY_WEBHOOK_SECRETS` JSON map to include all 4 domains.
+6. Add their `.myshopify.com` domains to the shop allowlist.
+7. Handle the **Storico + Classicoo "no COD tag" quirk** — they use `paymentGatewayNames = ["Cash on Delivery (COD)"]` but DON'T apply a `COD` tag. The existing COD detection in `server.js` already checks `payment_gateway_names` (normalized, handles "cash_on_delivery" → "cashondelivery"), so should work — but verify on first test webhook per store.
+
+### Open backlog items
+- Issue #2: per-shop prompt customization via Shopify metafields (not yet built).
+- No regression tests for issues #7–#12.
+- Legacy files to delete: `src/setup-retell-agent.mjs`, `src/setup-bolna-agent.mjs`, `src/update-retell-agent.mjs`.
+- Fine-tune Sarvam STT on the accumulating R2 audio corpus (long-term moat play).
+- TTS startup lag on first few seconds of call — still present, likely Sarvam WS connection warmup. Low priority unless user complaints surface.
+
+---
+
+## 🔑 Security note
+
+Urban Classics Client Secret was pasted in chat on 2026-04-19. It's in `.env` (gitignored) + chat transcript. Low practical risk but **rotate from Partner Dashboard at any convenient time** — regenerate in Glitch Grow X Urban config, update `SHOPIFY_WEBHOOK_SECRETS` map, restart.
+
+---
+
+## 📁 Files modified this session (2026-04-19)
 
 | File | What |
 |---|---|
-| `src/server.js` | LiveKit webhook handlers (`/turn`, `/egress-ready`), `WebhookReceiver`, dual auth, rawBody capture, express.json type expansion |
-| `src/livekit-agent.js` | `postTurn()` fire-and-forget, consent disclosure, textContent fix, AEC warmup tuning, maxTokens cap, minInterruptionWords, tool-fires-same-turn prompt |
-| `src/trigger-livekit-call.js` | R2/S3/GCP egress upload builder, 10s delayed egress start, MP4+Opus codec |
-| `src/lib/scheduler.js` | Two-phase dispatch, atomic first-write-wins outcome recording |
-| `prisma/schema.prisma` | New `CallTurn` model, extended `CallAttempt`, new index |
-| `prisma/migrations-manual/20260416210000_data_moat/migration.sql` | Production migration for CallTurn + CallAttempt columns |
-| `.env.example` | All new env vars documented |
-| `README.md` | Full rewrite — architecture diagram, data pipeline, design decisions, production notes |
-| `LICENSE` | BSL 1.1 with Glitch Executor Labs as licensor, 2030-04-18 change date |
-| `HANDOVER.md` | This file |
+| `src/livekit-agent.js` | Silero VAD at 8 kHz + 400ms silence threshold |
+| `src/server.js` | `SHOPIFY_WEBHOOK_SECRETS` JSON map · `resolveShopifySecret()` · freshness filter (`isOrderFresh`) · startup HMAC log |
+| `.env.example` | Documented multi-store HMAC pattern, freshness filters, DND vars |
+| `HANDOVER.md` | This document |
+| `/home/support/multi-store-theme-manager/SHOPIFY_STORES_INFRA.md` | Dev Dashboard app names added to the slug table |
+| `~/.claude/.../memory/project_glitch_cod_confirm.md` | 8-store app mapping appended |
+
+All commits pushed to `github.com/glitch-exec-labs/glitch-cod-confirm` main branch. See `git log --oneline` for the sequence.
 
 ---
 
-## Env vars added / changed
+## 🔁 How to resume verification
 
 ```bash
-# New — tool auth
-LIVEKIT_TOOL_SECRET=<strong-random-32+ char>
+# 1. Health snapshot
+curl -s http://127.0.0.1:3104/health | python3 -m json.tool
 
-# New — brand context (single-tenant; multi-tenant via metafields is future work)
-STORE_NAME="Urban Classics Store"
-STORE_CATEGORY=fashion
+# Expected today after 10:05 IST:
+# "dispatch_mode": "live", "live": true
+# "shopify_hmac_per_shop_count": 1
+# "in_dnd_now": false (after 10:05)
+# "queue": { "queued": N, "dispatching": 0, "doneToday": M, "failedToday": 0 }
 
-# New — audio recording
-RECORDING_BACKEND=r2
-RECORDING_BUCKET=glitch-cod-recordings
-RECORDING_PREFIX=cod-confirm/
-R2_ACCOUNT_ID=<redacted>
-R2_ACCESS_KEY_ID=<rotated, AKID starts 0cab>
-R2_SECRET_ACCESS_KEY=<rotated>
-RECORDING_CONSENT_DISCLOSURE=on
+# 2. Latest call turns
+PSQL_URL=$(grep '^DATABASE_URL=' /home/support/glitch-cod-confirm/.env | cut -d= -f2- | tr -d '"' | sed 's/?.*//')
+psql "$PSQL_URL" -c "SELECT \"roomName\", role, text FROM \"CallTurn\" ORDER BY \"createdAt\" DESC LIMIT 20;"
 
-# Existing — now in live mode
-DISPATCH_MODE=live
-```
+# 3. Recent call outcomes
+psql "$PSQL_URL" -c "SELECT \"orderId\", outcome, \"createdAt\" FROM \"ScheduledCall\" ORDER BY \"createdAt\" DESC LIMIT 20;"
 
----
+# 4. Service logs (latest)
+sudo journalctl -u cod-confirm.service --since "today 10:00 IST" --no-pager | grep -E "queued|dispatch|stale|error" | tail -50
+sudo journalctl -u cod-confirm-agent.service --since "today 10:00 IST" --no-pager | grep -E "\[priya\]|\[user\]|\[tool\]|session closed" | tail -50
 
-## How to resume
-
-### Start a call to verify everything still works
-```bash
-curl "http://127.0.0.1:3104/flow-test-livekit?shop=f51039.myshopify.com&order=8973&phone=%2B919039999585"
-# Expected: ok:true, room_name, sip participantId, egress_id:null
-# (egress_id in response is always null — actual egress fires 10s later, see logs)
-```
-
-### Verify pipeline end-to-end after a call
-```bash
-# 1. CallTurn rows
-PSQL_URL="${DATABASE_URL%%\?*}" psql "$PSQL_URL" \
-  -c "SELECT role, text, \"turnIndex\" FROM \"CallTurn\" WHERE \"roomName\" LIKE 'cod-8973%' ORDER BY \"turnIndex\";"
-
-# 2. Egress started + completed
-sudo journalctl -u cod-confirm.service --since "5 minutes ago" | grep -i egress
-
-# 3. Shopify tag (check admin)
-# Order should have: cod-confirmed | cod-cancelled | cod-agent-needed | cod-callback-requested
-```
-
-### If server is down
-```bash
+# 5. If something's wrong
 sudo systemctl status cod-confirm.service cod-confirm-agent.service
-sudo journalctl -u cod-confirm.service --since "10 minutes ago" --no-pager | tail -40
+sudo journalctl -u cod-confirm.service -n 100 --no-pager
+sudo journalctl -u cod-confirm-agent.service -n 100 --no-pager
 ```
 
-### Next suggested work (in priority order)
-1. Investigate + fix TTS "inference slower than realtime" — likely the #1 user-visible issue
-2. Add regression tests for the 6 closed issues (#7–#12)
-3. Close issue #2 — per-shop metafield resolution at dispatch time
-4. Delete legacy `setup-retell-*.mjs` / `setup-bolna-*.mjs` files
+---
+
+## 📚 Previous session (2026-04-18) — full log kept for context
+
+Production foundation was laid in the 2026-04-18 session:
+- 6 GitHub issues (#7–#12) fixed + closed
+- Data moat built: `CallTurn` table, R2 MP4/Opus egress, DPDP consent, LiveKit webhook routing
+- First successful end-to-end call: `cod-8973-1776469400808` (13 turns, `confirm_order` tool fired in-turn, Shopify tag written, R2 audio captured)
+- License: MIT → BSL 1.1
+- README rewrite to reflect shipped pipeline
+- AEC warmup 3000→500ms, LLM maxTokens 120, minInterruptionWords 2
+
+See `git log --oneline` for commit sequence. Both sessions' changes are on main.
 
 ---
 
