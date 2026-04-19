@@ -422,29 +422,16 @@ export default defineAgent({
         // within a 5-min window, saving ~300ms per subsequent LLM call.
         maxTokens: 60,
       }),
-      // Sarvam Bulbul v3 WS streaming endpoint is broken for our account
-      // (tested 2026-04-19 with fresh key: WS connects but never sends
-      // "final" event or audio — session.start() hangs, no greeting plays).
-      // Confirmed not key-related; same behavior across both old and new
-      // Sarvam API keys. REST endpoint works reliably.
-      //
-      // Workaround: streaming: false + tts.StreamAdapter wraps REST into a
-      // sentence-level streaming interface. Greeting latency is ~5-15s
-      // higher than WS would be, but calls RELIABLY work.
-      //
-      // Combined with maxTokens:60 + ONE-sentence-per-response prompt rule,
-      // subsequent turns are fast because each Priya sentence is short.
-      tts: new tts.StreamAdapter(
-        new sarvam.TTS({
-          model: 'bulbul:v3',
-          speaker: 'neha',
-          targetLanguageCode: lang,
-          pace: 1.0,
-          sampleRate: 8000,
-          streaming: false,
-        }),
-        new tokenize.basic.SentenceTokenizer(),
-      ),
+      // WS streaming path. REST was adding 10-15s per turn which killed UX
+      // (customer says "haan", Priya responds 22s later). WS gives ~3s turn
+      // times. Occasional WS stall is preferable to predictable 20s+ lag.
+      tts: new sarvam.TTS({
+        model: 'bulbul:v3',
+        speaker: 'neha',
+        targetLanguageCode: lang,
+        pace: 1.0,
+        sampleRate: 8000,
+      }),
       turnDetection: new livekit.turnDetector.MultilingualModel(),
       preemptiveGeneration: true,    // default; false caused >10s startup delay, users hung up before greeting
       // AEC warmup default is 3000ms — interruptions are DISABLED during warmup.
