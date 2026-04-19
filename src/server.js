@@ -34,7 +34,28 @@ const app = express();
 const prisma = new PrismaClient();
 
 const PORT = Number(process.env.PORT || 3104);
+
+// Shopify multi-store architecture: every store has its own app in the Dev
+// Dashboard → each app has its own Client Secret → each store's webhook HMAC
+// is signed with a different secret. We therefore keep a per-shop secret map
+// keyed by the myshopify domain (matches X-Shopify-Shop-Domain header). The
+// single SHOPIFY_WEBHOOK_SECRET still exists as a fallback for single-shop
+// deployments and for shops not yet entered in the map.
+//
+// Canonical mapping lives in ../multi-store-theme-manager/SHOPIFY_STORES_INFRA.md
+const SHOPIFY_WEBHOOK_SECRETS = (() => {
+  try {
+    return JSON.parse(process.env.SHOPIFY_WEBHOOK_SECRETS || '{}');
+  } catch (err) {
+    console.error('[config] SHOPIFY_WEBHOOK_SECRETS is not valid JSON — ignoring', err.message);
+    return {};
+  }
+})();
 const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || '';
+function resolveShopifySecret(shop) {
+  if (shop && SHOPIFY_WEBHOOK_SECRETS[shop]) return SHOPIFY_WEBHOOK_SECRETS[shop];
+  return SHOPIFY_WEBHOOK_SECRET;
+}
 // Shared secret sent by the LiveKit agent worker on every /webhook/livekit/tool/*
 // request. If unset, the tool endpoints fail closed (reject everything) — no
 // silent open mode, because these endpoints mutate Shopify state.
@@ -89,7 +110,9 @@ app.get('/health', async (_req, res) => {
       process.env.LIVEKIT_API_SECRET &&
       process.env.LIVEKIT_SIP_TRUNK_ID,
     ),
-    shopify_hmac_configured: Boolean(SHOPIFY_WEBHOOK_SECRET),
+    shopify_hmac_configured: Boolean(SHOPIFY_WEBHOOK_SECRET) || Object.keys(SHOPIFY_WEBHOOK_SECRETS).length > 0,
+    shopify_hmac_per_shop_count: Object.keys(SHOPIFY_WEBHOOK_SECRETS).length,
+    shopify_hmac_fallback_configured: Boolean(SHOPIFY_WEBHOOK_SECRET),
     livekit_tool_auth_configured: Boolean(LIVEKIT_TOOL_SECRET),
     allowed_shops: ALLOWLIST_ACTIVE ? ALLOWED_SHOPS : 'open',
     shopify_sessions: sessions,
@@ -102,24 +125,25 @@ app.get('/health', async (_req, res) => {
 // ─── Shopify webhook ─────────────────────────────────────────────────
 app.post('/webhook/shopify/orders-create', async (req, res) => {
   try {
-    // 1. HMAC verify
+    // 1. HMAC verify (per-shop secret; each store has its own Custom App)
     const hmac = req.get('X-Shopify-Hmac-Sha256');
-    if (SHOPIFY_WEBHOOK_SECRET) {
+    const shop = req.get('X-Shopify-Shop-Domain');
+    const secret = resolveShopifySecret(shop);
+    if (secret) {
       if (!hmac) {
         rejectCount.hmac_missing++;
-        console.warn('[shopify-webhook] HMAC header missing — rejecting');
+        console.warn(`[shopify-webhook] HMAC header missing — rejecting shop=${shop}`);
         return res.status(401).send('HMAC required');
       }
-      const expected = crypto.createHmac('sha256', SHOPIFY_WEBHOOK_SECRET).update(req.body).digest('base64');
+      const expected = crypto.createHmac('sha256', secret).update(req.body).digest('base64');
       if (expected !== hmac) {
         rejectCount.hmac_mismatch++;
-        console.warn('[shopify-webhook] HMAC mismatch');
+        console.warn(`[shopify-webhook] HMAC mismatch shop=${shop} (using ${SHOPIFY_WEBHOOK_SECRETS[shop] ? 'per-shop' : 'fallback'} secret)`);
         return res.status(401).send('HMAC mismatch');
       }
     }
 
     const order = JSON.parse(req.body.toString('utf8'));
-    const shop = req.get('X-Shopify-Shop-Domain');
 
     // 2. Shop allowlist
     if (!isShopAllowed(shop)) {
