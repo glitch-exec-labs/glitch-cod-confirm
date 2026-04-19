@@ -27,6 +27,8 @@ import {
   defineAgent,
   llm,
   ServerOptions,
+  tokenize,
+  tts,
   voice,
 } from '@livekit/agents';
 import * as silero from '@livekit/agents-plugin-silero';
@@ -414,22 +416,34 @@ export default defineAgent({
         temperature: 0.6,
         maxTokens: 120,   // Priya speaks 1-2 short sentences — cap prevents slow generation
       }),
-      tts: new sarvam.TTS({
-        model: 'bulbul:v3',
-        // bulbul:v3 streaming (WebSocket) accepts only native-v3 voices —
-        // NOT legacy v1/v2 ones like anushka / manisha / vidya / arya (those
-        // return WS 422). Native-v3 female list:
-        //   ritu, priya, neha, pooja, simran, kavya, ishita, shreya,
-        //   roopa, amelia, sophia, tanya, shruti, suhani, kavitha, rupali
-        // Swap this string to iterate on voice quality.
-        speaker: 'neha',
-        targetLanguageCode: lang,
-        pace: 1.0,                   // default; matches Sarvam's own benchmark-winning config
-        // Match the SIP leg natively (8 kHz μ-law). Skipping the 24k→8k
-        // resample step removes a major source of robotic artifacts on
-        // phone calls per Sarvam's own cookbook config.
-        sampleRate: 8000,
-      }),
+      // Sarvam Bulbul v3 WS streaming endpoint was stalling mid-greeting
+      // (observed 2026-04-19): sends initial audio frames, then goes silent
+      // without emitting "final" event or closing WS. LiveKit's 10s idle
+      // timeout force-closes the stream → customer hears nothing.
+      // Workaround: use REST (streaming: false) wrapped with tts.StreamAdapter
+      // so the agent still streams sentence-by-sentence, but each sentence
+      // uses a fresh REST call that reliably terminates. Slightly higher
+      // latency per sentence boundary but bullet-proof.
+      tts: new tts.StreamAdapter(
+        new sarvam.TTS({
+          model: 'bulbul:v3',
+          // bulbul:v3 streaming (WebSocket) accepts only native-v3 voices —
+          // NOT legacy v1/v2 ones like anushka / manisha / vidya / arya (those
+          // return WS 422). Native-v3 female list:
+          //   ritu, priya, neha, pooja, simran, kavya, ishita, shreya,
+          //   roopa, amelia, sophia, tanya, shruti, suhani, kavitha, rupali
+          // Swap this string to iterate on voice quality.
+          speaker: 'neha',
+          targetLanguageCode: lang,
+          pace: 1.0,                   // default; matches Sarvam's own benchmark-winning config
+          // Match the SIP leg natively (8 kHz μ-law). Skipping the 24k→8k
+          // resample step removes a major source of robotic artifacts on
+          // phone calls per Sarvam's own cookbook config.
+          sampleRate: 8000,
+          streaming: false,            // force REST path — see block comment above
+        }),
+        new tokenize.basic.SentenceTokenizer(),
+      ),
       turnDetection: new livekit.turnDetector.MultilingualModel(),
       preemptiveGeneration: true,    // default; false caused >10s startup delay, users hung up before greeting
       // AEC warmup default is 3000ms — interruptions are DISABLED during warmup.
