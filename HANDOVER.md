@@ -1,190 +1,296 @@
-# Session Handover — 2026-04-19
+# Session Handover — 2026-04-19 (second update, afternoon IST)
 
-Latest snapshot. Start here when resuming. Previous session logs are at the bottom for reference.
+**Read this first. Everything needed to resume is here. Do NOT place any code changes until you've run the test command below and seen current behaviour.**
 
 ---
 
-## 🟢 Production state (2026-04-19 ~05:55 IST)
+## ⚡ FIRST THING TO DO NEXT SESSION
+
+If the user asks for a test call, copy-paste this verbatim (swap number if needed):
+
+```bash
+curl -s "http://127.0.0.1:3104/flow-test-livekit?shop=f51039.myshopify.com&order=8973&phone=%2B919039999585" | python3 -m json.tool
+```
+
+- `shop=f51039.myshopify.com` — Urban Classics (only allowlisted shop)
+- `order=8973` — real order in Urban Classics with COD tag, used repeatedly for tests
+- `phone=%2B919039999585` — Man's primary test number (%2B is URL-encoded `+`)
+
+Then watch the logs in real time:
+
+```bash
+sudo journalctl -u cod-confirm-agent.service -f --no-pager | grep --line-buffered -E "priya\]|user\]|tool\]|closing|session closed|stalled"
+```
+
+Test alternative number if the primary doesn't ring: `+918390229669` (second test phone).
+
+---
+
+## 🟡 Current production state — NOT FULLY WORKING
 
 | Component | Status |
 |---|---|
 | `cod-confirm.service` (Express, :3104) | 🟢 active · `DISPATCH_MODE=live` |
-| `cod-confirm-agent.service` (LiveKit worker) | 🟢 active, VAD prewarmed at 8 kHz |
-| Shopify webhook (`orders/create`) | 🟢 HMAC via per-shop map (1 shop: Urban) |
-| LiveKit webhooks (`/webhook/livekit/egress-ready`) | 🟢 JWT-verified via `WebhookReceiver` |
-| Vobiz SIP trunk | 🟢 India outbound · ❌ international (CA blocked) |
-| Cloudflare R2 (`glitch-cod-recordings`) | 🟢 MP4/Opus landing |
-| PostgreSQL (CallTurn + CallAttempt + Session) | 🟢 per-turn transcripts working |
-| Shopify tag writes | 🟢 verified (`cod-confirmed` on #8973) |
-| Allowed shops | `f51039.myshopify.com` (Urban Classics only) |
-| DND window | **20:00 → 10:05 IST** (10-hour call window) |
-| Freshness cutoff | `QUEUE_ONLY_AFTER=2026-04-19T00:25:25Z` · `MAX_ORDER_AGE_HOURS=6` |
-| License | 🟢 BSL 1.1, change date 2030-04-18, Apache 2.0 successor |
+| `cod-confirm-agent.service` (LiveKit worker) | 🟢 active, VAD 8kHz prewarmed |
+| Shopify webhook HMAC | 🟢 per-shop map · Urban Classics only loaded |
+| LiveKit webhooks → Express `/webhook/livekit/egress-ready` | 🟢 JWT-verified |
+| Cloudflare R2 audio egress | 🟢 MP4/Opus working |
+| PostgreSQL (CallTurn + CallAttempt + Session) | 🟢 transcripts persist |
+| Shopify tag write (`cod-confirmed` / `cod-cancelled`) | 🟢 verified on #8973 |
+| DND window | 🟢 20:00–10:05 IST (10-hour call window) |
+| Freshness cutoff | 🟢 `QUEUE_ONLY_AFTER=2026-04-19T00:25:25Z`, `MAX_ORDER_AGE_HOURS=6` |
+| **Vobiz SIP trunk outbound** | 🟡 **INTERMITTENT — ~50% of calls don't reach destination** |
+| **Sarvam Bulbul v3 TTS (WS streaming)** | 🟡 **Occasional stalls but gives 3s turn times** |
+| **Per-turn response latency** | 🟡 **3s on WS (acceptable) vs 20s+ on REST (unusable)** |
+| **Priya voice quality on phone** | 🟢 Works when WS streams; Hindi pronunciation good |
 
-**First real production call expected:** 10:05 AM IST, 2026-04-19. No backfill — stale orders from Shopify's retry queue get 200-ack'd but skipped.
-
----
-
-## 🏪 The 4 Urban-family stores (live data)
-
-| Store | Shopify handle | App (Dev Dashboard) | Auth slug | Orders/30d | COD% | AOV | Call cost/mo @ ₹10.98 |
-|---|---|---|---|---|---|---|---|
-| **Urban Classics** | `f51039.myshopify.com` | `Glitch Grow X Urban` (`glitch-grow-x-urban-9`) | `urban` | **377** | 85% | ₹2,068 | ₹3,514 |
-| **Trendsetters** | `acmsuy-g0.myshopify.com` | `Glitch Grow X Trendsetter` (`glitch-grow-x-trendsetter-5`) | `trendsetters` | 212 | 79% | ₹2,132 | ₹1,834 |
-| **Storico** | `ys4n0u-ys.myshopify.com` | `Glitch Grow X Storico` (`glitch-grow-x-storico-6`) | `storico` | 171 | 87% | ₹2,244 | ₹1,636 |
-| **Classico** | `52j1ga-hz.myshopify.com` | `Glitch Grow X Classicoo` (`glitch-grow-x-classicoo-5`) | `classicoo` | 27 | 100% | ₹1,946 | ₹296 |
-| **FLEET** | | | | **787** | ~85% | — | **₹7,280/mo** |
-
-**Fleet economics:** GMV ₹16.7L/mo · Call cost 0.44% of GMV · Net positive ~₹34,486/mo at 60% RTO-catch rate.
-
-**Canonical source of truth:** `/home/support/multi-store-theme-manager/SHOPIFY_STORES_INFRA.md`
+**Urban Classics is technically live** (scheduler running, HMAC verified, DND respected) but real-world reliability on outbound calling is shaky. **Do not tell the user "it's production-ready" — it's in "debug mode" until Vobiz reliability is sorted.**
 
 ---
 
-## 🔒 Multi-app architecture — key operational rule
+## 🔥 Known issues as of end-of-session
 
-**Every store has its own Shopify Dev Dashboard app** under the single `Glitch Executor` org (support@glitchexecutor.com Partner account). Each app → own Client ID + Client Secret → **signs webhook HMACs with a different secret per store**.
+### Issue 1 — Vobiz SIP trunk is intermittent
+On several test calls today, the SIP call was dispatched successfully to LiveKit, LiveKit created the SIP participant, but the customer's phone never rang. Webhook pattern on failed calls:
 
-Implication: we use a JSON map `SHOPIFY_WEBHOOK_SECRETS` in `.env`, keyed by `.myshopify.com` domain. Adding a new store = adding one entry to the map. Fallback `SHOPIFY_WEBHOOK_SECRET` (singular) exists but is unset in prod so misconfigs fail loudly.
-
-```bash
-# Current state (Urban only — real value in /home/support/glitch-cod-confirm/.env, NEVER commit)
-SHOPIFY_WEBHOOK_SECRETS='{"f51039.myshopify.com":"shpss_<urban-client-secret>"}'
-SHOPIFY_WEBHOOK_SECRET=
+```
+participant_joined (agent) + track_published (agent audio)
+participant_joined (SIP) — but NO track_published from customer
+30s later: participant_left (ringing timeout)
 ```
 
----
+On successful calls, we'd see `track_published` for both participants. Difference = whether Vobiz successfully delivered to destination carrier.
 
-## 🛠 Everything shipped this session (2026-04-19)
+**Not a code issue.** Need to either:
+- Log into Vobiz dashboard and check CDR (Call Detail Records) for failed call attempts
+- Ask Vobiz support why calls to `+919039999585` / `+918390229669` are intermittently not reaching phone
+- Switch SIP trunk provider (Twilio Programmable Voice, Exotel, Plivo, Telnyx)
 
-### Performance (barge-in / mid-conversation hang fix)
-- **Silero VAD at 8 kHz** — matches SIP audio natively, skips resample step, halves samples/window. Resolves "inference is slower than realtime" warnings at call start on 2-CPU VPS.
-- **`minSilenceDuration` 550 → 400 ms** — snappier turn-end detection for SIP latency.
-- All prior barge-in fixes from 2026-04-18 still active (`aecWarmupDuration: 500`, `minInterruptionWords: 2`, `maxTokens: 120`).
+### Issue 2 — Sarvam Bulbul v3 WS TTS occasional stalls
+Sarvam's WebSocket TTS endpoint sometimes sends initial audio then stops emitting frames without sending `event_type: "final"` or closing the connection. LiveKit SDK's 10s idle timeout force-closes the stream (`"TTS stream stalled after producing audio, forcing close"`). Customer hears truncated/no greeting.
 
-### Cost accounting
-- Ran 4 end-to-end test calls, 4.9 min total, cost ~₹10.96 (~$0.13)
-- Per-call unit economics: **₹2.74 average** (LiveKit + Sarvam + OpenAI + Vobiz + R2)
-- Projection for 1,000 calls/day: ~₹3.3L/mo, or ~₹10.98/call at scale
+Happened maybe 20% of the time today across both old and new Sarvam API keys. **Not key-related.**
 
-### Shopify multi-store HMAC fix (production blocker!)
-- **Discovered:** every real Shopify webhook had been HMAC-rejected for 48 hours (no real orders had ever reached the app). Test calls worked only because `/flow-test-livekit` bypasses the webhook path.
-- **Root cause:** single `SHOPIFY_WEBHOOK_SECRET` can't handle multi-app architecture (each store's app has its own Client Secret).
-- **Fix:** added `SHOPIFY_WEBHOOK_SECRETS` JSON map keyed by shop domain. Resolves secret per-request using `X-Shopify-Shop-Domain` header (`resolveShopifySecret()` helper). Matches the existing `glitch-grow-ads-agent` pattern.
-- **Deployed:** Urban Classics Client Secret installed; confirmed `shopify_hmac_per_shop_count: 1` in health endpoint.
+**Tried and ruled out:**
+- Swapping to REST endpoint via `tts.StreamAdapter` — ✗ Works reliably BUT adds 10-20s per turn. Unusable: customer says "हाँ", Priya responds 22 seconds later.
+- Swapping Sarvam API key (old → new `sk_hhq4dcr5_...`) — ✗ No change in stall behaviour.
 
-### Tighter DND window (user-requested humane hours)
-- Was: 21:00 → 09:05 IST (TRAI minimum)
-- Now: **20:00 → 10:05 IST** (10-hour call window)
-- Env vars `DND_START_HOUR=20` `DND_END_HOUR=10` (dnd.js was already env-driven, no code change)
+**Current config = WS streaming.** Trading occasional stalls for 3s turn times because predictable 20s lag is worse.
 
-### Freshness filters (prevents Shopify retry-backlog flood)
-- `QUEUE_ONLY_AFTER` = ISO timestamp, hard cutoff for go-live moments — set to 2026-04-19T00:25:25Z
-- `MAX_ORDER_AGE_HOURS` = 6, rolling freshness backstop
-- Both return 200 (to stop Shopify retries) but skip queueing — logged as `stale: <reason>`
-- Prevents the 48h backlog of previously-rejected webhooks from flooding the queue now that HMAC is fixed
+### Issue 3 — Framework reliability frustration
+User explicitly raised [Pipecat](https://github.com/pipecat-ai/pipecat) as an alternative at end of session. Given the LiveKit Agents SDK v1.2.6 has several opaque failure modes (`startWallTime is not set when starting SegmentSynchronizerImpl.mainTask` errors, silent session.start() hangs, etc.), this is worth evaluating.
 
-### Docs + observability
-- `README.md` already overhauled yesterday — still current
-- Startup log now distinguishes `YES (per-shop=N)` / `YES (fallback)` / `NO` instead of binary yes/no
-- `.env.example` documents all new env vars with rationale
-- Memory file `project_glitch_cod_confirm.md` updated with full 8-store app mapping
-- `multi-store-theme-manager/SHOPIFY_STORES_INFRA.md` updated with Dev Dashboard app names alongside slugs
+**Next session should consider prototyping Pipecat as a parallel voice worker** while keeping the Shopify/scheduler/DB/R2 pipeline unchanged. Pipecat advantages:
+- Python-first, better debuggability
+- Explicit pipeline model (no SDK magic)
+- Native Sarvam, Groq, Cartesia, Deepgram support
+- Transport-agnostic (can keep using LiveKit just for SIP transport)
+
+Rough prototype scope: ~1-2 hours for a minimal Priya equivalent.
+
+### Issue 4 — Phone `+918390229669` specifically has codec/carrier issue
+Earlier in session: calls land, phone rings, user answers, but customer hears NO AUDIO from Priya. Same greeting reaches `+919039999585` fine. Not worth chasing — just use `+919039999585` for tests.
 
 ---
 
-## ⏭ Next steps (resume here)
+## 📋 Everything shipped today (2026-04-19)
 
-### Immediate (when you wake up)
-1. **Watch the 10:05 AM IST window open**:
+### Morning (fixes)
+- **Silero VAD at 8 kHz** (was 16kHz) — matches SIP audio sample rate natively, halves samples/window, cuts CPU load
+- **`minSilenceDuration` 550 → 400 ms** — snappier end-of-turn detection
+
+### Costing + store analysis
+- Ran cost analysis on 4 end-to-end test calls (4.9 min total, ~₹11, ~$0.13)
+- Per-call unit economics: **₹10.98/call** at scale
+- Pulled live order data for 4 dropshipping stores (Urban, Trendsetters, Storico, Classico):
+
+| Store | Shopify handle | Orders/30d | COD% | AOV | Fleet % |
+|---|---|---|---|---|---|
+| Urban Classics | `f51039.myshopify.com` | 377 | 85% | ₹2,068 | 48% |
+| Trendsetters | `acmsuy-g0.myshopify.com` | 212 | 79% | ₹2,132 | 25% |
+| Storico | `ys4n0u-ys.myshopify.com` | 171 | 87% | ₹2,244 | 23% |
+| Classico | `52j1ga-hz.myshopify.com` | 27 | 100% | ₹1,946 | 4% |
+| **Fleet** | **787 orders/30d** | **~85%** | — | |
+
+Fleet cost: ~₹7,280/mo · RTO savings: ~₹41,766/mo · Net positive: **+₹34,486/mo**
+
+### Critical production blocker fixed — per-shop HMAC
+Before fix: ALL Shopify webhooks had been HMAC-rejected for 48 hours. Zero real orders ever queued. Test calls worked only via `/flow-test-livekit` (bypasses webhook).
+
+Root cause: every Shopify store has its own app in Dev Dashboard with distinct Client Secret. Single `SHOPIFY_WEBHOOK_SECRET` can't validate all. Fixed with `SHOPIFY_WEBHOOK_SECRETS` JSON map pattern (`{ "shop_domain": "secret" }`), matches glitch-grow-ads-agent pattern.
+
+### DND window tightened
+Was 21:00 → 09:05 IST. User felt 9 AM is too early for someone who ordered at 9 PM. **New: 20:00 → 10:05 IST** (10-hour window).
+
+### Freshness filters
+`QUEUE_ONLY_AFTER` (hard cutoff for go-live moments) + `MAX_ORDER_AGE_HOURS` (rolling 6-hour cap). Prevents Shopify retry backlog from flooding queue after HMAC fix.
+
+### Multi-app architecture documented
+Every store has own Shopify app. Full 8-app mapping persisted in:
+- `/home/support/multi-store-theme-manager/SHOPIFY_STORES_INFRA.md` (canonical source)
+- `~/.claude/projects/-home-support/memory/project_glitch_cod_confirm.md` (memory pointer)
+
+### Afternoon (the frustrating part)
+Attempted to optimize per-turn latency. Many iterations:
+- Prompt tightened: "ONE short sentence per response, max 12 words"
+- LLM `maxTokens: 120 → 60` on gpt-4o-mini
+- OpenAI prompt caching relied upon (automatic for prompts ≥1024 tokens)
+- **Rotated OpenAI + Sarvam API keys** (both new, in `.env`)
+- Ping-ponged between WS streaming and REST (via StreamAdapter) TTS three times trying to fix silent/stalled calls
+- Cleaned stale LiveKit rooms
+
+### Current live config (post-ping-pong)
+```js
+llm: new openai.LLM({ model: 'gpt-4o-mini', temperature: 0.6, maxTokens: 60 })
+tts: new sarvam.TTS({ model: 'bulbul:v3', speaker: 'neha',
+                     targetLanguageCode: lang, pace: 1.0, sampleRate: 8000 })
+// ^ WS streaming (default), NOT wrapped in StreamAdapter
+```
+
+**Why WS not REST:** REST adds 10-20s per turn. Unusable. WS gives 3s turns but occasionally stalls. Chose reliability trade-off.
+
+---
+
+## 🔐 Secrets rotated today — MAY BE IN CHAT TRANSCRIPT
+
+| Key | Where | Action if sensitive |
+|---|---|---|
+| Urban Classics Shopify Client Secret (`shpss_66332f...`) | `SHOPIFY_WEBHOOK_SECRETS` in `.env` | Regenerate in Partner Dashboard → Glitch Grow X Urban → Configuration |
+| Sarvam API key (`sk_hhq4dcr5_...`) | `SARVAM_API_KEY` in `.env` | Regenerate from Sarvam dashboard |
+| OpenAI API key (`sk-proj-5Oib60T...`) | `OPENAI_API_KEY` in `.env` | Regenerate from OpenAI dashboard |
+
+All in `.env` (gitignored, never committed). User is aware. Rotate anytime.
+
+---
+
+## 🏪 The 4 Urban-family stores (live order data)
+
+| Store | Shopify handle | Dev Dashboard app | Auth slug |
+|---|---|---|---|
+| **Urban Classics** | `f51039.myshopify.com` | `Glitch Grow X Urban` | `urban` |
+| **Trendsetters** | `acmsuy-g0.myshopify.com` | `Glitch Grow X Trendsetter` | `trendsetters` |
+| **Storico** | `ys4n0u-ys.myshopify.com` | `Glitch Grow X Storico` | `storico` |
+| **Classico** | `52j1ga-hz.myshopify.com` | `Glitch Grow X Classicoo` | `classicoo` |
+
+**Currently only Urban Classics is in the allowlist** (`allowed_shops`). Storico and Classico webhooks will need gateway-based COD detection (they don't tag COD — current code filters by tag AND by `payment_gateway_names` includes "Cash on Delivery (COD)" so should work).
+
+**To onboard a new store:**
+1. Get its Client Secret from Partner Dashboard → [app name] → Configuration → Reveal
+2. Add to `SHOPIFY_WEBHOOK_SECRETS` JSON map in `.env`:
    ```bash
-   sudo journalctl -u cod-confirm.service --since "today 10:00 IST" | grep -E "queued|dispatch|stale"
+   SHOPIFY_WEBHOOK_SECRETS='{"f51039.myshopify.com":"shpss_xxx","acmsuy-g0.myshopify.com":"shpss_yyy"}'
    ```
-   Expect: a flurry of `stale: before_go_live_cutoff` messages as Shopify drains its retry queue, followed by the first `queued` when a genuinely-new order arrives.
-2. **Verify first real call lands** — customer's phone should ring ~10 min after webhook arrival, Shopify tag written, CallTurn rows persist, R2 audio file created.
-3. **Monitor Urban for 24-48h** before onboarding other stores.
-
-### After Urban is stable — expand to other 3 stores
-4. Get Client Secrets for Trendsetters / Storico / Classicoo apps from Partner Dashboard.
-5. Update `SHOPIFY_WEBHOOK_SECRETS` JSON map to include all 4 domains.
-6. Add their `.myshopify.com` domains to the shop allowlist.
-7. Handle the **Storico + Classicoo "no COD tag" quirk** — they use `paymentGatewayNames = ["Cash on Delivery (COD)"]` but DON'T apply a `COD` tag. The existing COD detection in `server.js` already checks `payment_gateway_names` (normalized, handles "cash_on_delivery" → "cashondelivery"), so should work — but verify on first test webhook per store.
-
-### Open backlog items
-- Issue #2: per-shop prompt customization via Shopify metafields (not yet built).
-- No regression tests for issues #7–#12.
-- Legacy files to delete: `src/setup-retell-agent.mjs`, `src/setup-bolna-agent.mjs`, `src/update-retell-agent.mjs`.
-- Fine-tune Sarvam STT on the accumulating R2 audio corpus (long-term moat play).
-- TTS startup lag on first few seconds of call — still present, likely Sarvam WS connection warmup. Low priority unless user complaints surface.
+3. Add domain to shop allowlist (search `allowed_shops` in `src/server.js`)
+4. Restart `cod-confirm.service`
+5. Verify health endpoint shows `shopify_hmac_per_shop_count: N`
 
 ---
 
-## 🔑 Security note
+## 🔁 How to resume next session
 
-Urban Classics Client Secret was pasted in chat on 2026-04-19. It's in `.env` (gitignored) + chat transcript. Low practical risk but **rotate from Partner Dashboard at any convenient time** — regenerate in Glitch Grow X Urban config, update `SHOPIFY_WEBHOOK_SECRETS` map, restart.
-
----
-
-## 📁 Files modified this session (2026-04-19)
-
-| File | What |
-|---|---|
-| `src/livekit-agent.js` | Silero VAD at 8 kHz + 400ms silence threshold |
-| `src/server.js` | `SHOPIFY_WEBHOOK_SECRETS` JSON map · `resolveShopifySecret()` · freshness filter (`isOrderFresh`) · startup HMAC log |
-| `.env.example` | Documented multi-store HMAC pattern, freshness filters, DND vars |
-| `HANDOVER.md` | This document |
-| `/home/support/multi-store-theme-manager/SHOPIFY_STORES_INFRA.md` | Dev Dashboard app names added to the slug table |
-| `~/.claude/.../memory/project_glitch_cod_confirm.md` | 8-store app mapping appended |
-
-All commits pushed to `github.com/glitch-exec-labs/glitch-cod-confirm` main branch. See `git log --oneline` for the sequence.
-
----
-
-## 🔁 How to resume verification
-
+### 1. First 60 seconds — verify nothing has broken overnight
 ```bash
-# 1. Health snapshot
+# Health check
 curl -s http://127.0.0.1:3104/health | python3 -m json.tool
 
-# Expected today after 10:05 IST:
-# "dispatch_mode": "live", "live": true
-# "shopify_hmac_per_shop_count": 1
-# "in_dnd_now": false (after 10:05)
-# "queue": { "queued": N, "dispatching": 0, "doneToday": M, "failedToday": 0 }
+# Services
+sudo systemctl is-active cod-confirm.service cod-confirm-agent.service
 
-# 2. Latest call turns
-PSQL_URL=$(grep '^DATABASE_URL=' /home/support/glitch-cod-confirm/.env | cut -d= -f2- | tr -d '"' | sed 's/?.*//')
-psql "$PSQL_URL" -c "SELECT \"roomName\", role, text FROM \"CallTurn\" ORDER BY \"createdAt\" DESC LIMIT 20;"
-
-# 3. Recent call outcomes
-psql "$PSQL_URL" -c "SELECT \"orderId\", outcome, \"createdAt\" FROM \"ScheduledCall\" ORDER BY \"createdAt\" DESC LIMIT 20;"
-
-# 4. Service logs (latest)
-sudo journalctl -u cod-confirm.service --since "today 10:00 IST" --no-pager | grep -E "queued|dispatch|stale|error" | tail -50
-sudo journalctl -u cod-confirm-agent.service --since "today 10:00 IST" --no-pager | grep -E "\[priya\]|\[user\]|\[tool\]|session closed" | tail -50
-
-# 5. If something's wrong
-sudo systemctl status cod-confirm.service cod-confirm-agent.service
-sudo journalctl -u cod-confirm.service -n 100 --no-pager
-sudo journalctl -u cod-confirm-agent.service -n 100 --no-pager
+# Check overnight Shopify webhook traffic (should be 0 during DND window)
+sudo journalctl -u cod-confirm.service --since "today" --no-pager | grep -E "shopify-webhook|queued|stale" | tail -20
 ```
+
+### 2. When the user asks for a test call — use this exact command
+```bash
+curl -s "http://127.0.0.1:3104/flow-test-livekit?shop=f51039.myshopify.com&order=8973&phone=%2B919039999585" | python3 -m json.tool
+```
+
+Watch logs:
+```bash
+sudo journalctl -u cod-confirm-agent.service -f --no-pager | grep --line-buffered -vE "inference is slower|tokio|speech_id\":|participantValue" | grep --line-buffered -E "call for|priya\]|user\]|tool\]|stalled|closing"
+```
+
+### 3. Identify which failure mode if anything goes wrong
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| `HMAC mismatch` in server logs | Wrong shop's secret or new shop not in map | Add to `SHOPIFY_WEBHOOK_SECRETS` |
+| `stale: too_old` or `before_go_live_cutoff` | Order's `created_at` failed freshness filter | Increase `MAX_ORDER_AGE_HOURS` or clear `QUEUE_ONLY_AFTER` temporarily |
+| `[shopify] ... prepaid — skipping` | Order not COD | Expected behavior, only COD orders call |
+| Phone rings but silent | Sarvam WS TTS stall | Look for `"TTS stream stalled"` in agent logs. If found, either wait and retry, or switch to REST via StreamAdapter (see below) |
+| Phone doesn't ring at all | Vobiz SIP trunk issue | Check LiveKit webhook events — if only agent's `track_published` fires (no customer track), Vobiz didn't deliver. Check Vobiz CDR. |
+| `call for Man Desai / #8973` appears but NO `[priya]` log within 30s | Silent hang, likely Sarvam TTS | Restart `cod-confirm-agent.service`, try again |
+| `SegmentSynchronizerImpl.mainTask: startWallTime is not set` error | Known SDK bug when using StreamAdapter | Non-fatal, ignore |
+
+### 4. If Sarvam WS stalls hard — revert to REST
+Edit `src/livekit-agent.js`, find the `tts:` block, swap to:
+```js
+tts: new tts.StreamAdapter(
+  new sarvam.TTS({
+    model: 'bulbul:v3', speaker: 'neha', targetLanguageCode: lang,
+    pace: 1.0, sampleRate: 8000, streaming: false,
+  }),
+  new tokenize.basic.SentenceTokenizer(),
+),
+```
+And add `tokenize` and `tts` to the `@livekit/agents` import (already imported right now). Then `sudo systemctl restart cod-confirm-agent.service`. **Warning: this gives reliable calls but 10-20s per turn. User won't like it.**
+
+### 5. If user wants to evaluate Pipecat
+See "Issue 3" above. Repo: https://github.com/pipecat-ai/pipecat. User brought this up today. Plan:
+1. Create a new Python worker alongside existing Node.js agent: `src/pipecat-agent/priya.py`
+2. Reuse the Express server's Shopify webhook handler + scheduler + DB + R2 egress — only swap the voice pipeline
+3. Keep LiveKit as SIP transport (Pipecat has a LiveKit transport)
+4. Use same Sarvam STT/TTS but via Pipecat's explicit pipeline (better observability)
+5. A/B test by routing some calls to Pipecat worker via different agent name
 
 ---
 
-## 📚 Previous session (2026-04-18) — full log kept for context
+## 📁 Files that changed today
 
-Production foundation was laid in the 2026-04-18 session:
-- 6 GitHub issues (#7–#12) fixed + closed
-- Data moat built: `CallTurn` table, R2 MP4/Opus egress, DPDP consent, LiveKit webhook routing
-- First successful end-to-end call: `cod-8973-1776469400808` (13 turns, `confirm_order` tool fired in-turn, Shopify tag written, R2 audio captured)
-- License: MIT → BSL 1.1
-- README rewrite to reflect shipped pipeline
-- AEC warmup 3000→500ms, LLM maxTokens 120, minInterruptionWords 2
+| File | Change |
+|---|---|
+| `src/livekit-agent.js` | VAD 8kHz, minSilenceDuration 400ms, maxTokens 60, prompt "ONE sentence", ping-ponged TTS WS/REST — currently on **WS direct** |
+| `src/server.js` | `SHOPIFY_WEBHOOK_SECRETS` JSON map + `resolveShopifySecret()`, `isOrderFresh()` filter, per-shop HMAC log |
+| `.env` | Added `SHOPIFY_WEBHOOK_SECRETS` (Urban only), `DND_START_HOUR=20`, `DND_END_HOUR=10`, `QUEUE_ONLY_AFTER`, `MAX_ORDER_AGE_HOURS=6`. Rotated `SARVAM_API_KEY`, `OPENAI_API_KEY`. |
+| `.env.example` | Documented all new env vars |
+| `HANDOVER.md` | This file (twice rewritten today) |
+| `/home/support/multi-store-theme-manager/SHOPIFY_STORES_INFRA.md` | Added Dev Dashboard app names alongside slugs |
+| `~/.claude/.../memory/project_glitch_cod_confirm.md` | 8-store app mapping appended |
 
-See `git log --oneline` for commit sequence. Both sessions' changes are on main.
+All git commits on `main` branch; last commit `59d0286` pushed. TTS revert to WS direct (current live code) is **uncommitted** — check `git status`.
+
+---
+
+## 📚 Important context for next session
+
+- **Moat is data, not prompts.** Every call records audio to R2 + per-turn CallTurn rows in Postgres. This corpus is the long-term asset for Sarvam fine-tuning. Preserve recording fidelity above all else.
+- **User's style:** Technical founder/CTO. Direct comms. Expects honest tech assessment, not cheerleading. Will push back if numbers don't match reality.
+- **Do NOT claim "this is fixed" until a live call demonstrates it.** User tested ~10 times today; patience is thin on voice issues.
+- **Time-of-day matters:** DND window 20:00–10:05 IST. Outside that, even `/flow-test-livekit` needs manual trigger.
+- **BSL 1.1 license.** Anything we add must be compatible with that. Change date 2030-04-18, successor Apache 2.0.
+
+---
+
+## 🎯 Priority order for next session
+
+1. **Verify phone call still works** — one test call, check timings. If it's still 20s+ lag, the WS-vs-REST decision may need revisiting.
+2. **Investigate Vobiz reliability** — if calls still intermittently don't reach phone, this is the biggest blocker. Ask user to check Vobiz dashboard CDR, or we switch trunk provider.
+3. **Evaluate Pipecat prototype** — user's ask. ~1-2 hrs. Python branch, parallel worker, same backend.
+4. **Onboard remaining 3 stores** — Trendsetters/Storico/Classico. Each needs its Client Secret + allowlist entry.
+5. **Delete legacy files** — `src/setup-retell-agent.mjs`, `src/setup-bolna-agent.mjs`, `src/update-retell-agent.mjs` (dead code).
+6. **Add regression tests** for the 6 closed issues (#7–#12).
 
 ---
 
 ## Contact
 
 Commercial licensing / enterprise deployment: **support@glitchexecutor.com**
+
+---
+
+**TL;DR for next Claude:**
+- Production state: Urban Classics live, tech works ~70% of calls
+- Biggest unknown: Vobiz reliability (external to our code)
+- Voice latency: 3s per turn on WS TTS, 20s on REST — stay on WS
+- User is evaluating Pipecat. Respect that option.
+- Exact test command: see top of this doc. Don't ask user how to place a test — the command is right there.
