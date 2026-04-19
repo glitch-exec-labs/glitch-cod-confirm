@@ -13,7 +13,9 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-19
 
-- **12:45 UTC** — auto-sync: 2026-04-19 12:45 UTC (`1e4e627`) — 1 file
+- **13:15 UTC** — auto-sync: 2026-04-19 13:15 UTC (`befd3cb`) — 1 file
+        M	src/livekit-agent.js
+- **12:45 UTC** — auto-sync: 2026-04-19 12:45 UTC (`de7aed7`) — 2 files
         M	src/livekit-agent.js
 - **12:13 UTC** — perf: shorter responses to cut per-turn latency (`59d0286`) — 1 file
     - maxTokens 120 → 60 on gpt-4o-mini mechanically enforces brevity
