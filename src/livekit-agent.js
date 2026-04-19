@@ -422,27 +422,29 @@ export default defineAgent({
         // within a 5-min window, saving ~300ms per subsequent LLM call.
         maxTokens: 60,
       }),
-      tts: new sarvam.TTS({
-        model: 'bulbul:v3',
-        // bulbul:v3 streaming (WebSocket) accepts only native-v3 voices —
-        // NOT legacy v1/v2 ones like anushka / manisha / vidya / arya (those
-        // return WS 422). Native-v3 female list:
-        //   ritu, priya, neha, pooja, simran, kavya, ishita, shreya,
-        //   roopa, amelia, sophia, tanya, shruti, suhani, kavitha, rupali
-        // Swap this string to iterate on voice quality.
-        speaker: 'neha',
-        targetLanguageCode: lang,
-        pace: 1.0,                   // default; matches Sarvam's own benchmark-winning config
-        // Match the SIP leg natively (8 kHz μ-law). Skipping the 24k→8k
-        // resample step removes a major source of robotic artifacts on
-        // phone calls per Sarvam's own cookbook config.
-        sampleRate: 8000,
-        // WS streaming path (default). Previously stalled with old Sarvam
-        // key — confirmed root cause was key-level throttling, not the WS
-        // protocol. With fresh key (2026-04-19) WS should stream cleanly
-        // and greeting latency drops from ~30s (REST) back to ~2-3s.
-        // If stalls return, fall back to tts.StreamAdapter + streaming:false.
-      }),
+      // Sarvam Bulbul v3 WS streaming endpoint is broken for our account
+      // (tested 2026-04-19 with fresh key: WS connects but never sends
+      // "final" event or audio — session.start() hangs, no greeting plays).
+      // Confirmed not key-related; same behavior across both old and new
+      // Sarvam API keys. REST endpoint works reliably.
+      //
+      // Workaround: streaming: false + tts.StreamAdapter wraps REST into a
+      // sentence-level streaming interface. Greeting latency is ~5-15s
+      // higher than WS would be, but calls RELIABLY work.
+      //
+      // Combined with maxTokens:60 + ONE-sentence-per-response prompt rule,
+      // subsequent turns are fast because each Priya sentence is short.
+      tts: new tts.StreamAdapter(
+        new sarvam.TTS({
+          model: 'bulbul:v3',
+          speaker: 'neha',
+          targetLanguageCode: lang,
+          pace: 1.0,
+          sampleRate: 8000,
+          streaming: false,
+        }),
+        new tokenize.basic.SentenceTokenizer(),
+      ),
       turnDetection: new livekit.turnDetector.MultilingualModel(),
       preemptiveGeneration: true,    // default; false caused >10s startup delay, users hung up before greeting
       // AEC warmup default is 3000ms — interruptions are DISABLED during warmup.

@@ -13,7 +13,20 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-19
 
-- **10:45 UTC** — auto-sync: 2026-04-19 10:45 UTC (`6a08b09`) — 1 file
+- **12:45 UTC** — auto-sync: 2026-04-19 12:45 UTC (`1e4e627`) — 1 file
+        M	src/livekit-agent.js
+- **12:13 UTC** — perf: shorter responses to cut per-turn latency (`59d0286`) — 1 file
+    - maxTokens 120 → 60 on gpt-4o-mini mechanically enforces brevity
+    - Prompt updated: ONE sentence per response, no chaining with
+      "और"/"फिर"/"और" (Hindi) or "and"/"then"/"so" (English)
+    - OpenAI prompt caching is automatic for prompts ≥1024 tokens;
+      our ~1800-token system prompt caches after 2nd call in 5 min,
+      saving ~300ms/call on LLM first-token latency
+    Root cause of perceived slowness on +919039999585 test: Priya was
+    generating 2-3 long sentences per turn (~10s spoken audio each),
+    making total turn time feel like 13s when actual LLM+TTS latency
+    was only ~3s. Brevity fixes the UX.
+- **10:45 UTC** — auto-sync: 2026-04-19 10:45 UTC (`42b80da`) — 2 files
         M	src/livekit-agent.js
 - **00:51 UTC** — docs: refresh handover for 2026-04-19 session (`1c27668`) — 1 file
     Full state snapshot: Urban Classics live, per-shop HMAC map,
