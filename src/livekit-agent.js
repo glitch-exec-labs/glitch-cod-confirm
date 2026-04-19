@@ -115,7 +115,7 @@ Tool call उसी LLM turn में होनी चाहिए जिसम
 - Numbers ALWAYS spoken words में: "एक हज़ार नौ सौ नब्बे रुपय" — NEVER digits जैसे "Rs. 1990"।
 - Product name short category में बोलो ("sunglasses", "shirt", "cap") — full English brand SKU names जैसे "Cartier Transparent Jaguar Karan Aujla Edition" out loud मत पढ़ो।
 - लम्बे English brand names / model numbers बीच में मत डालो — prosody break होती है। "आपका product" use करो।
-- Each response 2 short Hindi/Hinglish sentences के अंदर रखो।
+- **CRITICAL:** ONE short sentence per response — max 12 words. Do NOT chain sentences with "और" / "फिर" / "तो". Do NOT combine multiple steps in one reply. Say one thing, then WAIT for customer's response before next step. Phone-call latency demands brevity.
 
 Discount, stock for other items, promotional offers, other products — इन topics पर बात मत करो। सिर्फ़ THIS order पर focus।`;
 }
@@ -168,7 +168,7 @@ The tool call must happen in the same LLM turn as the customer's final confirmat
 **Speech-friendliness (CRITICAL for TTS):**
 - Numbers ALWAYS as spoken words: "one thousand nine hundred ninety rupees" — NEVER digits like "Rs. 1990".
 - Use short shopper-friendly product names ("sunglasses", "shirt", "cap"), NOT full English SKUs with multiple brand words strung together.
-- Keep responses to 2 short sentences.
+- **CRITICAL:** ONE short sentence per response — max 12 words. Do NOT chain sentences with "and" / "then" / "so". Do NOT combine multiple steps in one reply. Say one thing, then WAIT for the customer's response before the next step. Phone-call latency demands brevity.
 
 Do NOT discuss: discounts outside the order, stock for other items, promotional offers, other products. Focus only on THIS order.`;
 }
@@ -414,36 +414,35 @@ export default defineAgent({
       llm: new openai.LLM({
         model: 'gpt-4o-mini',
         temperature: 0.6,
-        maxTokens: 120,   // Priya speaks 1-2 short sentences — cap prevents slow generation
+        // 60 tokens ≈ one short Hindi sentence (~12 words). Forces brevity
+        // mechanically — combined with the "ONE sentence" prompt rule, cuts
+        // per-turn TTS latency dramatically.
+        // Prompt caching is automatic on OpenAI for prompts ≥1024 tokens —
+        // our ~1800-token system prompt auto-caches after the 2nd call
+        // within a 5-min window, saving ~300ms per subsequent LLM call.
+        maxTokens: 60,
       }),
-      // Sarvam Bulbul v3 WS streaming endpoint was stalling mid-greeting
-      // (observed 2026-04-19): sends initial audio frames, then goes silent
-      // without emitting "final" event or closing WS. LiveKit's 10s idle
-      // timeout force-closes the stream → customer hears nothing.
-      // Workaround: use REST (streaming: false) wrapped with tts.StreamAdapter
-      // so the agent still streams sentence-by-sentence, but each sentence
-      // uses a fresh REST call that reliably terminates. Slightly higher
-      // latency per sentence boundary but bullet-proof.
-      tts: new tts.StreamAdapter(
-        new sarvam.TTS({
-          model: 'bulbul:v3',
-          // bulbul:v3 streaming (WebSocket) accepts only native-v3 voices —
-          // NOT legacy v1/v2 ones like anushka / manisha / vidya / arya (those
-          // return WS 422). Native-v3 female list:
-          //   ritu, priya, neha, pooja, simran, kavya, ishita, shreya,
-          //   roopa, amelia, sophia, tanya, shruti, suhani, kavitha, rupali
-          // Swap this string to iterate on voice quality.
-          speaker: 'neha',
-          targetLanguageCode: lang,
-          pace: 1.0,                   // default; matches Sarvam's own benchmark-winning config
-          // Match the SIP leg natively (8 kHz μ-law). Skipping the 24k→8k
-          // resample step removes a major source of robotic artifacts on
-          // phone calls per Sarvam's own cookbook config.
-          sampleRate: 8000,
-          streaming: false,            // force REST path — see block comment above
-        }),
-        new tokenize.basic.SentenceTokenizer(),
-      ),
+      tts: new sarvam.TTS({
+        model: 'bulbul:v3',
+        // bulbul:v3 streaming (WebSocket) accepts only native-v3 voices —
+        // NOT legacy v1/v2 ones like anushka / manisha / vidya / arya (those
+        // return WS 422). Native-v3 female list:
+        //   ritu, priya, neha, pooja, simran, kavya, ishita, shreya,
+        //   roopa, amelia, sophia, tanya, shruti, suhani, kavitha, rupali
+        // Swap this string to iterate on voice quality.
+        speaker: 'neha',
+        targetLanguageCode: lang,
+        pace: 1.0,                   // default; matches Sarvam's own benchmark-winning config
+        // Match the SIP leg natively (8 kHz μ-law). Skipping the 24k→8k
+        // resample step removes a major source of robotic artifacts on
+        // phone calls per Sarvam's own cookbook config.
+        sampleRate: 8000,
+        // WS streaming path (default). Previously stalled with old Sarvam
+        // key — confirmed root cause was key-level throttling, not the WS
+        // protocol. With fresh key (2026-04-19) WS should stream cleanly
+        // and greeting latency drops from ~30s (REST) back to ~2-3s.
+        // If stalls return, fall back to tts.StreamAdapter + streaming:false.
+      }),
       turnDetection: new livekit.turnDetector.MultilingualModel(),
       preemptiveGeneration: true,    // default; false caused >10s startup delay, users hung up before greeting
       // AEC warmup default is 3000ms — interruptions are DISABLED during warmup.
