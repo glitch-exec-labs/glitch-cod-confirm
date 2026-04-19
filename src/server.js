@@ -62,6 +62,32 @@ function resolveShopifySecret(shop) {
 const LIVEKIT_TOOL_SECRET = process.env.LIVEKIT_TOOL_SECRET || '';
 const CALL_DELAY_MS = Number(process.env.CALL_DELAY_MS ?? 10 * 60_000); // 10 min default
 
+// Staleness filters — prevent calling customers about already-delivered,
+// forgotten, or Shopify-retry-backlog orders. Both apply (AND).
+//
+// QUEUE_ONLY_AFTER: ISO-8601 timestamp. Orders created on/before this moment
+//   are silently ack'd but NOT queued. Useful for "go-live" events where a
+//   backlog of retries would otherwise flood the queue.
+// MAX_ORDER_AGE_HOURS: rolling freshness check. Orders created more than
+//   this many hours ago are skipped. Default 6 hours.
+const QUEUE_ONLY_AFTER   = process.env.QUEUE_ONLY_AFTER
+  ? Date.parse(process.env.QUEUE_ONLY_AFTER) || null
+  : null;
+const MAX_ORDER_AGE_HOURS = Number(process.env.MAX_ORDER_AGE_HOURS ?? 6);
+function isOrderFresh(order) {
+  const created = Date.parse(order.created_at || order.processed_at || '');
+  if (!created) return { fresh: true, reason: 'no_created_at' }; // fail-open if Shopify omits
+  const now = Date.now();
+  if (QUEUE_ONLY_AFTER && created <= QUEUE_ONLY_AFTER) {
+    return { fresh: false, reason: `before_go_live_cutoff (created=${new Date(created).toISOString()})` };
+  }
+  if (MAX_ORDER_AGE_HOURS > 0 && (now - created) > MAX_ORDER_AGE_HOURS * 3600_000) {
+    const ageH = ((now - created) / 3600_000).toFixed(1);
+    return { fresh: false, reason: `too_old (${ageH}h, limit=${MAX_ORDER_AGE_HOURS}h)` };
+  }
+  return { fresh: true };
+}
+
 // LiveKit Cloud signs webhook bodies with the project API secret and sends
 // the signed JWT in the Authorization header. We verify with WebhookReceiver
 // using the SAME API key/secret the agent worker uses to connect.
@@ -172,6 +198,14 @@ app.post('/webhook/shopify/orders-create', async (req, res) => {
     if (!isCod) {
       console.log(`[shopify] ${order.name} prepaid — skipping`);
       return res.status(200).send('ok (prepaid)');
+    }
+
+    // 3.5 Freshness check — skip Shopify-retry-backlog + accidental replays.
+    //     Return 200 so Shopify stops retrying; never silently queue stale.
+    const fresh = isOrderFresh(order);
+    if (!fresh.fresh) {
+      console.log(`[shopify] ${order.name} (${shop}) skipped stale — ${fresh.reason}`);
+      return res.status(200).send(`ok (stale: ${fresh.reason})`);
     }
 
     // 4. Phone resolution + normalization
@@ -606,7 +640,16 @@ async function onFinalFail(row, reason) {
 app.listen(PORT, '127.0.0.1', async () => {
   console.log(`[glitch-cod-confirm] listening on 127.0.0.1:${PORT}`);
   console.log(`[glitch-cod-confirm] DISPATCH MODE: ${DISPATCH_MODE === 'live' ? '🟢 LIVE — real customer calls will be placed' : '🔒 DRY-RUN — no real calls (set DISPATCH_MODE=live to enable)'}`);
-  console.log(`[glitch-cod-confirm] HMAC configured: ${Boolean(SHOPIFY_WEBHOOK_SECRET) ? 'YES' : 'NO (OPEN — development only!)'}`);
+  {
+    const perShopCount = Object.keys(SHOPIFY_WEBHOOK_SECRETS).length;
+    const fallback     = Boolean(SHOPIFY_WEBHOOK_SECRET);
+    let hmacStatus;
+    if (perShopCount > 0 && fallback)   hmacStatus = `YES (per-shop=${perShopCount} + fallback)`;
+    else if (perShopCount > 0)          hmacStatus = `YES (per-shop=${perShopCount})`;
+    else if (fallback)                  hmacStatus = `YES (single fallback — legacy)`;
+    else                                hmacStatus = `NO (OPEN — development only!)`;
+    console.log(`[glitch-cod-confirm] HMAC configured: ${hmacStatus}`);
+  }
   console.log(`[glitch-cod-confirm] LiveKit tool auth: ${Boolean(LIVEKIT_TOOL_SECRET) ? 'YES' : 'NO (tool webhooks will reject all requests)'}`);
   console.log(`[glitch-cod-confirm] shop allowlist: ${ALLOWLIST_ACTIVE ? ALLOWED_SHOPS.join(', ') : 'OPEN (all shops)'}`);
   console.log(`[glitch-cod-confirm] call delay: ${CALL_DELAY_MS}ms  |  DND now: ${isDnd(new Date())}`);
