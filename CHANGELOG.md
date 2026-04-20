@@ -11,9 +11,15 @@ Body text (if present) shown as indented sub-bullets.
 
 ---
 
+## 2026-04-20
+
+- **16:30 UTC** — auto-sync: 2026-04-20 16:30 UTC (`0392677`) — 2 files
+        M	package.json
+        M	pnpm-lock.yaml
+
 ## 2026-04-19
 
-- **18:15 UTC** — auto-sync: 2026-04-19 18:15 UTC (`5910316`) — 1 file
+- **18:15 UTC** — auto-sync: 2026-04-19 18:15 UTC (`5b8ff13`) — 2 files
         M	src/livekit-agent.js
 - **17:08 UTC** — docs: detailed session handover with exact test commands (`5a92945`) — 1 file
     The previous handover was too high-level — next session didn't know

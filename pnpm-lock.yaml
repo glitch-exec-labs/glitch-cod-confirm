@@ -11,6 +11,9 @@ importers:
       '@livekit/agents':
         specifier: ^1.2.6
         version: 1.2.6(@livekit/rtc-node@0.13.25)(typescript@6.0.2)(zod@4.3.6)
+      '@livekit/agents-plugin-elevenlabs':
+        specifier: 1.2.7
+        version: 1.2.7(@livekit/agents@1.2.6(@livekit/rtc-node@0.13.25)(typescript@6.0.2)(zod@4.3.6))(@livekit/rtc-node@0.13.25)
       '@livekit/agents-plugin-google':
         specifier: ^1.2.6
         version: 1.2.6(@livekit/agents@1.2.6(@livekit/rtc-node@0.13.25)(typescript@6.0.2)(zod@4.3.6))(@livekit/rtc-node@0.13.25)
@@ -280,6 +283,12 @@ packages:
   '@isaacs/fs-minipass@4.0.1':
     resolution: {integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w==}
     engines: {node: '>=18.0.0'}
+
+  '@livekit/agents-plugin-elevenlabs@1.2.7':
+    resolution: {integrity: sha512-weikkx82lg4/iSrQEig+hAf7FUHikllCkSqL7cr4OB+1E6s9CyNU9DcZ9Es6cWasVYU+IrZYHDs+3TIdTYoezw==}
+    peerDependencies:
+      '@livekit/agents': 1.2.7
+      '@livekit/rtc-node': ^0.13.25
 
   '@livekit/agents-plugin-google@1.2.6':
     resolution: {integrity: sha512-s1D0a6kKoO+S742UkmjakqZWfCmf31jTOuSB3zsPS8cT8bsLoO/aV2K5f3EimYEmXyyolAs7a2RyTWfqXsyPHA==}
@@ -1742,6 +1751,16 @@ snapshots:
   '@isaacs/fs-minipass@4.0.1':
     dependencies:
       minipass: 7.1.3
+
+  '@livekit/agents-plugin-elevenlabs@1.2.7(@livekit/agents@1.2.6(@livekit/rtc-node@0.13.25)(typescript@6.0.2)(zod@4.3.6))(@livekit/rtc-node@0.13.25)':
+    dependencies:
+      '@livekit/agents': 1.2.6(@livekit/rtc-node@0.13.25)(typescript@6.0.2)(zod@4.3.6)
+      '@livekit/mutex': 1.1.1
+      '@livekit/rtc-node': 0.13.25
+      ws: 8.20.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   '@livekit/agents-plugin-google@1.2.6(@livekit/agents@1.2.6(@livekit/rtc-node@0.13.25)(typescript@6.0.2)(zod@4.3.6))(@livekit/rtc-node@0.13.25)':
     dependencies:
