@@ -34,6 +34,7 @@ import {
 import * as silero from '@livekit/agents-plugin-silero';
 import * as livekit from '@livekit/agents-plugin-livekit';
 import * as sarvam from '@livekit/agents-plugin-sarvam';
+import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as openai from '@livekit/agents-plugin-openai';
 import { z } from 'zod';
 
@@ -228,6 +229,40 @@ function articleFor(s) {
  * doesn't have to re-pass shop/order_id/order_name on every invocation —
  * they're injected server-side from LiveKit participant attributes.
  */
+// TTS provider factory. Switch via TTS_PROVIDER env var: 'sarvam' (default)
+// or 'elevenlabs'. Both return a @livekit/agents-compatible TTS instance.
+// Sample rate matches SIP 8kHz for both paths so the downstream pipeline is
+// unchanged. Voice IDs / speakers are env-tunable so we can pin a specific
+// ElevenLabs voice without touching code.
+function buildTTS(lang) {
+  const provider = (process.env.TTS_PROVIDER || 'sarvam').toLowerCase();
+  if (provider === 'elevenlabs') {
+    const voiceId = process.env.ELEVENLABS_VOICE_ID;
+    if (!voiceId) {
+      throw new Error('TTS_PROVIDER=elevenlabs but ELEVENLABS_VOICE_ID is not set');
+    }
+    console.log(`[tts] provider=elevenlabs voice=${voiceId} lang=${lang}`);
+    return new elevenlabs.TTS({
+      voiceId,
+      // turbo_v2_5 is the low-latency multilingual model; the non-turbo
+      // multilingual_v2 is better quality but adds ~400ms TTFT which hurts
+      // SIP UX. If the A/B test shows turbo is too flat, try 'eleven_multilingual_v2'.
+      model: process.env.ELEVENLABS_MODEL || 'eleven_turbo_v2_5',
+      language: lang,                // 'hi-IN' | 'en-IN' — plugin strips to base lang
+      encoding: 'pcm_8000',          // match SIP sample rate
+      // apiKey from ELEVEN_API_KEY env var (plugin default)
+    });
+  }
+  console.log(`[tts] provider=sarvam speaker=neha lang=${lang}`);
+  return new sarvam.TTS({
+    model: 'bulbul:v3',
+    speaker: 'neha',
+    targetLanguageCode: lang,
+    pace: 1.0,
+    sampleRate: 8000,
+  });
+}
+
 function buildTools(v) {
   // Sandbox/test rooms arrive without shop + shopify_order_id attributes, so
   // backend tool endpoints 400 on every call. The LLM would then retry the
@@ -436,16 +471,15 @@ export default defineAgent({
         // within a 5-min window, saving ~300ms per subsequent LLM call.
         maxTokens: 60,
       }),
-      // WS streaming path. REST was adding 10-15s per turn which killed UX
-      // (customer says "haan", Priya responds 22s later). WS gives ~3s turn
-      // times. Occasional WS stall is preferable to predictable 20s+ lag.
-      tts: new sarvam.TTS({
-        model: 'bulbul:v3',
-        speaker: 'neha',
-        targetLanguageCode: lang,
-        pace: 1.0,
-        sampleRate: 8000,
-      }),
+      // TTS provider is env-selectable so we can A/B Sarvam vs ElevenLabs on
+      // the same call flow. Default is `sarvam` — purpose-trained on Hindi/
+      // Hinglish code-mix, ~1/4 to 1/8 the cost of ElevenLabs per char, and
+      // gives ~3s turn times on WS. ElevenLabs is the alternative when we're
+      // benchmarking naturalness.
+      //
+      // WS streaming path either way. REST was adding 10-15s per turn which
+      // killed UX (customer says "haan", Priya responds 22s later).
+      tts: buildTTS(lang),
       turnDetection: new livekit.turnDetector.MultilingualModel(),
       preemptiveGeneration: true,    // default; false caused >10s startup delay, users hung up before greeting
       // AEC warmup default is 3000ms — interruptions are DISABLED during warmup.

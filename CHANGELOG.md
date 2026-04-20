@@ -13,7 +13,11 @@ Body text (if present) shown as indented sub-bullets.
 
 ## 2026-04-20
 
-- **16:30 UTC** — auto-sync: 2026-04-20 16:30 UTC (`0392677`) — 2 files
+- **16:45 UTC** — auto-sync: 2026-04-20 16:45 UTC (`c3e4bda`) — 3 files
+        M	package.json
+        M	pnpm-lock.yaml
+        M	src/livekit-agent.js
+- **16:30 UTC** — auto-sync: 2026-04-20 16:30 UTC (`423c5c1`) — 3 files
         M	package.json
         M	pnpm-lock.yaml
 
