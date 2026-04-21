@@ -38,6 +38,7 @@ import * as livekit from '@livekit/agents-plugin-livekit';
 import * as sarvam from '@livekit/agents-plugin-sarvam';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 import * as openai from '@livekit/agents-plugin-openai';
+import { RoomServiceClient } from 'livekit-server-sdk';
 import { z } from 'zod';
 
 const WEBHOOK_BASE = process.env.COD_CONFIRM_WEBHOOK_BASE
@@ -553,6 +554,24 @@ export default defineAgent({
       minInterruptionWords: 2,
     });
 
+    // Auto-hangup guard: once any of these tools fires, the call is done —
+    // the next assistant turn is just the farewell. Without this guard, the
+    // SIP leg stayed up until the CUSTOMER hung up, burning VoIP minutes on
+    // anyone who forgot to press end.
+    const TERMINAL_TOOLS = new Set([
+      'confirm_order',
+      'cancel_order',
+      'request_human_agent',
+      'request_callback',
+    ]);
+    let terminalToolFired = false;
+    let hangupTimer = null;
+    // 10s bounds the typical farewell (~5s spoken) + a couple seconds of
+    // customer "ok thank you" tail + grace buffer. Shorter risks clipping the
+    // farewell on slower TTS; much longer wastes minutes on customers who
+    // silently hold the line. Tune via AUTO_HANGUP_MS env var if needed.
+    const autoHangupMs = parseInt(process.env.AUTO_HANGUP_MS || '10000', 10);
+
     // Each event handler persists to Postgres AND still logs to journalctl
     // so on-the-fly debugging remains zero-friction.
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
@@ -569,6 +588,31 @@ export default defineAgent({
       const text = ev.item.textContent ?? '';
       console.log(`[priya] ${text.slice(0, 200)}`);
       postTurn({ role: 'assistant', text });
+
+      // If a terminal tool already fired, THIS is the farewell turn.
+      // Schedule the SIP hangup after the turn has had time to speak out.
+      if (terminalToolFired && !hangupTimer) {
+        const roomName = ctx.room?.name;
+        hangupTimer = setTimeout(async () => {
+          try {
+            if (!roomName) return;
+            const lkUrl = process.env.LIVEKIT_URL;
+            const lkKey = process.env.LIVEKIT_API_KEY;
+            const lkSecret = process.env.LIVEKIT_API_SECRET;
+            if (!lkUrl || !lkKey || !lkSecret) {
+              console.warn('[auto-hangup] LIVEKIT_* env missing — cannot terminate room');
+              return;
+            }
+            console.log(`[auto-hangup] deleting room ${roomName} after farewell — VoIP-minutes guard (${autoHangupMs}ms)`);
+            const rs = new RoomServiceClient(lkUrl, lkKey, lkSecret);
+            await rs.deleteRoom(roomName);
+          } catch (err) {
+            // Most common non-fatal error: room already gone because the
+            // customer hung up first. Log at info level, not error.
+            console.log(`[auto-hangup] deleteRoom (likely already closed): ${err.message}`);
+          }
+        }, autoHangupMs);
+      }
     });
     session.on(voice.AgentSessionEventTypes.FunctionToolsExecuted, (ev) => {
       const calls = ev.functionCalls || [];
@@ -581,9 +625,19 @@ export default defineAgent({
           tool_args:   c.arguments ?? c.args ?? undefined,
           tool_result: typeof c.result === 'string' ? c.result : (c.result ? JSON.stringify(c.result) : undefined),
         });
+        if (TERMINAL_TOOLS.has(c.name)) {
+          terminalToolFired = true;
+          console.log(`[auto-hangup] armed after terminal tool: ${c.name}`);
+        }
       }
     });
     session.on(voice.AgentSessionEventTypes.Close, () => {
+      // Clear the pending hangup timer so we don't fire deleteRoom on an
+      // already-closed room after the session ends via natural disconnect.
+      if (hangupTimer) {
+        clearTimeout(hangupTimer);
+        hangupTimer = null;
+      }
       console.log(`[livekit-agent] session closed after ${turnIndex} turns`);
     });
 
