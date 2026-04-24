@@ -25,6 +25,7 @@
  */
 
 import { triggerLivekitCall } from '../trigger-livekit-call.js';
+import { getShopBranding } from './shops.js';
 import { adjustForDnd } from './dnd.js';
 
 // ── Tunables ──────────────────────────────────────────────────────────
@@ -144,18 +145,23 @@ async function dispatchOne(prisma, row, onFinalFail) {
   //      auto-retry in that case, because we would place a duplicate call.
   let placement;
   try {
+    // Per-shop branding — Priya says "Storico" for Storico orders,
+    // "Urban Classics Store" for Urban, etc. Looked up from STORE_BRANDING.
+    const branding = getShopBranding(row.shop);
     placement = await triggerLivekitCall({
       phone: row.phone,
       lang:  row.lang,
       order: {
-        id:           row.orderId,
-        name:         row.orderName,
-        shop:         row.shop,
-        customerName: payload.customer_name,
-        total:        payload.total_amount,
-        product:      payload.product_name,
-        city:         payload.delivery_city,
-        area:         payload.delivery_area,
+        id:             row.orderId,
+        name:           row.orderName,
+        shop:           row.shop,
+        customerName:   payload.customer_name,
+        total:          payload.total_amount,
+        product:        payload.product_name,
+        city:           payload.delivery_city,
+        area:           payload.delivery_area,
+        storeName:      branding.name,
+        storeCategory:  branding.category,
       },
     });
   } catch (err) {

@@ -24,7 +24,7 @@ import { WebhookReceiver } from 'livekit-server-sdk';
 import { triggerLivekitCall } from './trigger-livekit-call.js';
 import { normalizePhone } from './lib/phone.js';
 import { computeScheduledAt, adjustForDnd, isDnd } from './lib/dnd.js';
-import { isShopAllowed, ALLOWED_SHOPS, ALLOWLIST_ACTIVE } from './lib/shops.js';
+import { isShopAllowed, ALLOWED_SHOPS, ALLOWLIST_ACTIVE, getShopBranding } from './lib/shops.js';
 import { fetchWithTimeout } from './lib/fetch.js';
 import { startScheduler, markScheduledCallOutcome, DISPATCH_MODE } from './lib/scheduler.js';
 
@@ -619,7 +619,12 @@ app.get('/flow-test-livekit', async (req, res) => {
     if (!phone) return res.status(400).send(`Invalid phone: ${phoneRaw}`);
 
     const order = await fetchShopifyOrderByName(shop, orderName);
-    const result = await triggerLivekitCall({ phone, order: { ...order, shop }, lang });
+    const branding = getShopBranding(shop);
+    const result = await triggerLivekitCall({
+      phone,
+      order: { ...order, shop, storeName: branding.name, storeCategory: branding.category },
+      lang,
+    });
     res.json({ ok: true, livekit: result, lang, context_sent: order });
   } catch (e) {
     console.error('[flow-test-livekit]', e);
