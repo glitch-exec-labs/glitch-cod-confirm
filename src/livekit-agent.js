@@ -159,6 +159,8 @@ const CATEGORY_MAP = {
   spectacles:          ['glasses',    'चश्मे'],
   goggle:              ['goggles',    'चश्मे'],
   goggles:             ['goggles',    'चश्मे'],
+  shade:               ['sunglasses', 'चश्मे'],
+  shades:              ['sunglasses', 'चश्मे'],
   shirt:               ['shirt',      'शर्ट'],
   tshirt:              ['t-shirt',    'टी-शर्ट'],
   't-shirt':           ['t-shirt',    'टी-शर्ट'],
@@ -765,6 +767,18 @@ export default defineAgent({
 
     // Hot-swap placeholder → real agent (real instructions + tools).
     session.updateAgent(realAgent);
+
+    // Wait for the agent-swap task to finish before queuing speech. Without
+    // this, real call #2907 (SUNNY, Storico) showed the welcome NEVER
+    // played — the placeholderAgent's activity was being torn down while
+    // session.say queued the speech, so the speech landed on a dying
+    // activity and was lost. Customer sat through 29s of dead air.
+    // session.updateActivityTask is the internal Task created by
+    // updateAgent; awaiting its .result blocks until the new activity is
+    // fully active and ready to receive speech (~tens of ms in practice).
+    if (session.updateActivityTask?.result) {
+      try { await session.updateActivityTask.result; } catch { /* fall through to say */ }
+    }
 
     // Priya speaks first. LLM can riff afterwards.
     // Welcome is intentionally NON-interruptible. Real-call #9022 (Kirti M)
