@@ -580,16 +580,6 @@ export default defineAgent({
       }
     }
 
-    // Placeholder agent used only while session.start() runs in parallel
-    // with waitForParticipant. It has no tools and trivial instructions,
-    // so even if (somehow) it were activated before updateAgent swap, it
-    // couldn't do any damage. The real agent is swapped in once we know
-    // the actual v/lang.
-    const placeholderAgent = new voice.Agent({
-      instructions: 'Placeholder agent. Do not speak. Wait for real instructions.',
-      tools: {},
-    });
-
     const session = new voice.AgentSession({
       vad: ctx.proc.userData.vad,
       stt: new sarvam.STT({
@@ -721,15 +711,22 @@ export default defineAgent({
       console.log(`[livekit-agent] session closed after ${ctxMut.turnIndex} turns`);
     });
 
-    // ── Kick off cold-start NOW, overlap with SIP ring ──────────────────
-    const coldStartMs = Date.now();
-    const startPromise = session.start({ agent: placeholderAgent, room: ctx.room });
-    console.log('[cold-start] session.start kicked off in parallel with participant wait');
-
-    // Wait for the SIP participant (the customer) to join the room.
-    // Typical SIP ring on Vobiz: 2–8s. STT/TTS warmup runs during this.
+    // ── Serial start (reverted from parallelize) ───────────────────────
+    // Earlier attempt: kick off session.start with a placeholder agent in
+    // parallel with waitForParticipant, then updateAgent once attrs arrive.
+    // Cold-start dropped to ~100ms, BUT placeholder Agent (empty tools,
+    // trivial instructions) caused AgentActivity mainTask to self-exit
+    // immediately — "no scheduled speech, no work, exiting." When updateAgent
+    // then fired, the framework couldn't recover the dead activity and
+    // session.say(welcome) silently dropped. Real customers (Storico #2907)
+    // sat through 30s of dead air. Awaiting updateActivityTask.result didn't
+    // help because the activity had already exited before we got there.
+    //
+    // Reverted to serial: wait for participant, build real agent with real
+    // attrs, then start the session with that real agent. Cold-start is
+    // ~3-5s with TLS/DNS pre-warmed (vs ~10s without), but the welcome
+    // ALWAYS plays. Reliability beats latency at this stage.
     const participant = await ctx.waitForParticipant();
-    const participantArrivedMs = Date.now();
 
     // Pull dynamic context from participant attributes (set by
     // SipClient.createSipParticipant's participantAttributes option).
@@ -752,45 +749,16 @@ export default defineAgent({
     const lang = ctxMut.lang;
     console.log(`[livekit-agent] call for ${v.customer_name} / ${v.order_number} (${v.shop}) lang=${lang}`);
 
-    // Build the real agent with per-call instructions + tools.
     const realAgent = new voice.Agent({
       instructions: buildSystemPrompt(v, lang),
       tools: buildTools(v),
     });
 
-    // Wait for the warmup we kicked off earlier. If SIP ring took 5s and
-    // warmup took 6s, we only wait 1s here instead of the 10s we used to
-    // wait serially after pickup.
-    await startPromise;
-    const startReadyMs = Date.now();
-    console.log(`[cold-start] ready: sipRing=${participantArrivedMs - coldStartMs}ms warmupWait=${startReadyMs - participantArrivedMs}ms total=${startReadyMs - coldStartMs}ms`);
+    const coldStartMs = Date.now();
+    await session.start({ agent: realAgent, room: ctx.room });
+    console.log(`[cold-start] serial-start: ${Date.now() - coldStartMs}ms (TLS prewarmed)`);
 
-    // Hot-swap placeholder → real agent (real instructions + tools).
-    session.updateAgent(realAgent);
-
-    // Wait for the agent-swap task to finish before queuing speech. Without
-    // this, real call #2907 (SUNNY, Storico) showed the welcome NEVER
-    // played — the placeholderAgent's activity was being torn down while
-    // session.say queued the speech, so the speech landed on a dying
-    // activity and was lost. Customer sat through 29s of dead air.
-    // session.updateActivityTask is the internal Task created by
-    // updateAgent; awaiting its .result blocks until the new activity is
-    // fully active and ready to receive speech (~tens of ms in practice).
-    if (session.updateActivityTask?.result) {
-      try { await session.updateActivityTask.result; } catch { /* fall through to say */ }
-    }
-
-    // Priya speaks first. LLM can riff afterwards.
-    // Welcome is intentionally NON-interruptible. Real-call #9022 (Kirti M)
-    // exposed a failure mode: customer pressed a phone button mid-greeting,
-    // the DTMF tone crossed our 600ms/3-word VAD threshold, speech was
-    // interrupted mid-sentence, STT got no transcribable text from the
-    // DTMF audio, the LLM had no user input to respond to, AgentActivity
-    // mainTask exited, and the customer sat through 11s of dead air before
-    // hanging up. Making the 10s greeting non-interruptible avoids the
-    // entire failure path. Subsequent turns (product confirm, address,
-    // farewell) keep interruptions enabled so customers CAN say
-    // "haan haan jaldi karo" / "nahi mujhe nahi chahiye" mid-Priya.
+    // Welcome is NON-interruptible — see #9022 commit 556a91d for why.
     session.say(buildWelcome(v, lang), { allowInterruptions: false });
   },
 });
