@@ -11,9 +11,58 @@ Body text (if present) shown as indented sub-bullets.
 
 ---
 
+## 2026-04-27
+
+- **07:45 UTC** — auto-sync: 2026-04-27 07:45 UTC (`c9874fa`) — 1 file
+        M	src/livekit-agent.js
+- **04:11 UTC** — fix(#13): close CallAttempt rows on scheduler failure paths (`91a9702`) — 2 files
+    Previously markScheduledCallOutcome() (tool-driven outcomes) closed the
+    latest open CallAttempt by stamping endedAt + disposition. But the
+    scheduler's handleFailure() — invoked by both pre-call dispatch errors
+    (triggerLivekitCall threw) and the stuck-dispatch sweep — only updated
+    ScheduledCall, leaving CallAttempt.endedAt = null and
+    CallAttempt.disposition = null forever. Result: orphan half-rows that
+    broke turnCount, audio-recording joins, and any "currently active"
+    operational dashboard.
+    Issue #13 evidence on production showed 7 orphan attempts dating back
+    to the parallel-dispatch storm of 2026-04-22.
+
 ## 2026-04-25
 
-- **04:30 UTC** — auto-sync: 2026-04-25 04:30 UTC (`145d952`) — 1 file
+- **20:35 UTC** — docs: rewrite README to match shipped architecture (`36527cb`) — 1 file
+    Original README had drifted significantly from current state. Rewrite
+    covers what actually runs in production today.
+    Updated:
+    - TTS: ElevenLabs (Samisha, eleven_turbo_v2_5) is now production default;
+      Sarvam Bulbul stays wired as 10-second outage fallback. Was documented
+      the other way around.
+    - LLM token cap: 60 (was 120 in docs) — enforces "≤12 word sentences"
+      prompt rule mechanically.
+    - DND default: 20:00–10:00 IST (humane window, tighter than TRAI's
+      21:00 cutoff). Was 21:00–09:00 in docs.
+- **04:58 UTC** — revert: parallelize cold-start — placeholder Agent races to self-exit (`085bbf7`) — 1 file
+    Real call #2907 (SUNNY, Storico) showed the parallelize approach has
+    an unfixable race. The flow:
+      session.start({ agent: placeholderAgent })  // empty tools, trivial instr
+      await waitForParticipant
+      session.updateAgent(realAgent)
+      await session.updateActivityTask?.result    // attempted fix in 77168f3
+      session.say(welcome)
+    But the placeholder Agent (no tools, trivial instructions) caused
+    AgentActivity mainTask to self-exit IMMEDIATELY upon activation —
+    "scheduling paused and no more speech tasks to wait" → "AgentActivity
+- **04:47 UTC** — voice: await agent-swap task before queuing welcome (fix dead-air race) (`77168f3`) — 1 file
+    Real call #2907 (SUNNY, Storico) exposed a race condition introduced
+    by the parallelize cold-start refactor. The flow:
+      session.start({ agent: placeholderAgent })  // starts placeholder activity
+      await waitForParticipant
+      session.updateAgent(realAgent)              // async swap, returns void
+      session.say(welcome)                        // queues on... which activity?
+    session.updateAgent() does NOT return a promise. It kicks off an
+    internal Task stored at session.updateActivityTask. If session.say()
+    runs while that swap is in progress, the speech can land on the
+    placeholder's activity (being torn down) and never play.
+- **04:30 UTC** — auto-sync: 2026-04-25 04:30 UTC (`ac2709e`) — 2 files
         A	scripts/find-yesterday-cod.mjs
 - **04:27 UTC** — voice: non-interruptible welcome to survive DTMF / button presses (`556a91d`) — 1 file
     Real call #9022 (Kirti M, Urban Classics) showed a hard failure mode:

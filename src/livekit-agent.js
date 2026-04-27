@@ -636,20 +636,102 @@ export default defineAgent({
     ]);
     let terminalToolFired = false;
     let hangupTimer = null;
+    let voicemailDetected = false;
+    let userTurnCount = 0;
     // 10s bounds the typical farewell (~5s spoken) + a couple seconds of
     // customer "ok thank you" tail + grace buffer. Shorter risks clipping the
     // farewell on slower TTS; much longer wastes minutes on customers who
     // silently hold the line. Tune via AUTO_HANGUP_MS env var if needed.
     const autoHangupMs = parseInt(process.env.AUTO_HANGUP_MS || '10000', 10);
 
+    // Voicemail / answering-machine detection.
+    //
+    // Real call #2953 (Abhijit, Storico) went to voicemail. Sarvam Saaras
+    // running in hi-IN mode transliterated the English voicemail prompts
+    // into Devanagari ("Call has been forwarded to voicemail" became
+    // "कॉल हैज़ बीन फॉरवर्डेड टू वॉइस मेल"). Priya thought it was a real
+    // customer, delivered the full pitch into the voicemail recording,
+    // then waited 2 minutes for a yes/no — burning ~2 minutes of VoIP
+    // minutes per such call.
+    //
+    // Strategy: pattern-match the first few user transcripts against the
+    // standard Indian-carrier voicemail prompts (in Devanagari-transliterated
+    // English AND native Hindi). If we hit a match in the first 4 user
+    // utterances after dispatch, kill the call immediately. After that
+    // window we treat any "voicemail"-shaped phrase as legitimate
+    // conversation — false positives become a real risk past the greeting.
+    //
+    // Patterns are deliberately broad: a partial match anywhere in the
+    // transcript is enough. Better to over-cancel a few real calls than
+    // under-detect voicemail at scale.
+    const VOICEMAIL_PATTERNS = [
+      /व[ोॉ]इस[\s\-]*मे/,            // "voice mail" → वॉइस मेल / वोइस मेल
+      /फ[ॉो]रवर्डेड\s+टू/,            // "forwarded to"
+      /न[ॉो]ट\s+अव[ेै]लेबल/,          // "not available"
+      /रिक[ॉो]र्ड\s+य[ोौ]र\s+म[ैे]सेज/, // "record your message"
+      /लीव\s+अ\s+म[ैे]सेज/,          // "leave a message"
+      /एट\s+द\s+ट[ोौ]न/,             // "at the tone"
+      /आफ्टर\s+द\s+बीप/,            // "after the beep"
+      /व्हेन\s+य[ोौ]\s+ह[ैै]व\s+फिनिश्ड/, // "when you have finished"
+      /इस\s+समय\s+उपलब्ध\s+नहीं/,    // Hindi: "not available right now"
+      /कृपया\s+संदेश\s+छोड़/,          // Hindi: "please leave a message"
+      /voicemail|voice\s*mail/i,
+      /answering\s*machine/i,
+      /please\s+(record|leave)\s+(your\s+)?(message|name)/i,
+      /(after|at)\s+the\s+(tone|beep)/i,
+    ];
+
+    function hangupNow(reason) {
+      const roomName = ctx.room?.name;
+      if (!roomName) return;
+      const lkUrl = process.env.LIVEKIT_URL;
+      const lkKey = process.env.LIVEKIT_API_KEY;
+      const lkSecret = process.env.LIVEKIT_API_SECRET;
+      if (!lkUrl || !lkKey || !lkSecret) {
+        console.warn(`[hangup] LIVEKIT_* env missing — cannot terminate room (${reason})`);
+        return;
+      }
+      console.log(`[hangup] deleteRoom ${roomName} — ${reason}`);
+      const rs = new RoomServiceClient(lkUrl, lkKey, lkSecret);
+      rs.deleteRoom(roomName).catch(err =>
+        console.log(`[hangup] deleteRoom (likely already closed): ${err.message}`)
+      );
+    }
+
     // Each event handler persists to Postgres AND still logs to journalctl
     // so on-the-fly debugging remains zero-friction.
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
       if (!ev.isFinal) return;
-      console.log(`[user] ${ev.transcript}`);
+      const transcript = ev.transcript || '';
+      console.log(`[user] ${transcript}`);
+      userTurnCount++;
+
+      // Voicemail check — only in the first 4 user transcripts after
+      // dispatch (window covers a multi-line voicemail intro). Past that,
+      // any "voicemail"-shaped phrase is real conversation.
+      if (!voicemailDetected && userTurnCount <= 4) {
+        const matched = VOICEMAIL_PATTERNS.find(p => p.test(transcript));
+        if (matched) {
+          voicemailDetected = true;
+          console.log(`[voicemail] detected on user turn #${userTurnCount}: "${transcript}" (matched ${matched})`);
+          // Tag this attempt as voicemail via the postTurn channel so
+          // dashboards can filter on it; treat outcome as no_answer (the
+          // scheduler retry path) — the customer wasn't actually reached.
+          postTurn({
+            role: 'tool',
+            text: 'voicemail_detected',
+            tool_name: 'voicemail_detected',
+            tool_args: { transcript },
+            tool_result: 'hangup',
+          });
+          hangupNow('voicemail detected');
+          return;
+        }
+      }
+
       postTurn({
         role: 'user',
-        text: ev.transcript || '',
+        text: transcript,
         stt_confidence: typeof ev.confidence === 'number' ? ev.confidence : undefined,
       });
     });
